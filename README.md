@@ -16,11 +16,11 @@
 - 其他消息平台：可使用基础积分、签到、抽奖、排行等通用功能，但平台专属管理能力可能不可用
 
 ## 安装方式
-1. 将插件目录放入 AstrBot 插件目录，例如 `C:\Users\用户名\.astrbot\data\plugins\astrbot_plugin_point_system`
+1. 将插件目录放入 AstrBot 的插件目录，例如 `<AstrBot 数据目录>/plugins/astrbot_plugin_point_system`
 2. 重启 AstrBot 或在插件管理中重新加载插件
 3. 在 AstrBot 管理面板中根据 `_conf_schema.json` 调整配置
 4. 首次运行后会自动在插件数据目录下生成积分数据文件
-5. 插件目录附带了最小 [requirements.txt](C:/Users/99505/.astrbot/data/plugins/astrbot_plugin_point_system/requirements.txt) 说明文件；插件本身没有额外第三方 pip 依赖，运行依赖 AstrBot 主程序环境
+5. 插件目录附带了最小 [requirements.txt](requirements.txt) 说明文件；插件本身没有额外第三方 pip 依赖，运行依赖 AstrBot 主程序环境
 
 ---
 
@@ -293,11 +293,13 @@
 
 ---
 
-## 运行与验证
-当前目录不是 Git 仓库，且本地 Python 环境未安装 `astrbot` 模块，因此无法在当前终端完成完整运行态联调。当前已完成的本地验证如下：
+## 开发验证
+发布前建议至少完成以下检查：
 
-- `python -m py_compile main.py birthday_feature.py lottery_feature.py`
-- `_conf_schema.json` UTF-8 JSON 解析检查
+- 编译检查：`python -m py_compile main.py page_api.py birthday_feature.py lottery_feature.py`
+- 页面脚本检查：`node --check pages/兑换管理/app.js`
+- `_conf_schema.json` JSON 解析与全部文本文件 UTF-8 编码检查
+- 兑换命令、配置保存冲突、桌面与移动端页面回归
 
 ---
 
@@ -390,4 +392,6 @@
 3. 展示名称：`群积分助手`
 4. 仓库地址：[https://github.com/menglimi/astrbot_plugin_point_system](https://github.com/menglimi/astrbot_plugin_point_system)
 5. 数据目录：`<AstrBot数据目录>\plugin_data\astrbot_plugin_point_system`
-6. 当前终端环境：可完成语法与配置校验，暂不支持完整 AstrBot 运行态联调
+6. 最低 AstrBot 版本：`4.22.0`
+
+扩展页内置 Lucide `v0.468.0` 图标库，按 [ISC License](pages/兑换管理/LICENSE) 使用。
