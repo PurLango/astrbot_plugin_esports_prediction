@@ -3,7 +3,7 @@ import datetime
 from typing import Any, Dict
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api.message_components import Plain
 
 
@@ -18,18 +18,40 @@ class BirthdayFeatureMixin:
         except Exception as exc:
             logger.debug(f"获取生日签到 LLM provider 失败: {exc}")
 
-        fallback = (
-            f"{reply_name}生日快乐，愿你今天被温柔以待、好运常伴！"
-            f"已为你送上 {reward_points} {self._get_points_name()}。"
+        fallback = self._pick_random_reply_variant(
+            [
+                f"{reply_name}生日快乐呀，今天这份小礼物已经稳稳送到啦。",
+                f"生日快乐生日快乐，今天主角光环和小奖励一起到账了。",
+                f"今天寿星本人请收下祝福，顺便把这份小奖励也打包带走。",
+                f"先把生日祝福端上来，今天这点小惊喜也归你啦。",
+            ],
+            default=(
+                f"{reply_name}生日快乐呀，今天这份 {reward_points} {self._get_points_name()} "
+                "的小礼物已经送到啦。"
+            ),
         )
         if not provider:
-            return self._single_line_message(fallback)
+            return self._freeform_reply_message(fallback)
 
+        style_hint = self._pick_random_reply_variant(
+            [
+                "像熟人顺手送祝福，轻松一点。",
+                "像群友看到寿星后自然接一句，别太工整。",
+                "像朋友说话，温暖里带一点活泼。",
+                "像热闹群聊里的随手祝福，不要像贺卡文案。",
+            ],
+            default="像熟人顺手送祝福，别太工整。",
+        )
         prompt = (
+            "你在一个中文群聊里帮忙接一句生日祝福。"
             f"群成员 {reply_name} 发送了“{birthday_cfg['sign_in_trigger']}”，"
-            f"系统将发放 {reward_points} 点积分作为生日奖励。"
-            "请写一句温暖、自然、适合群聊发送的中文生日祝福。"
-            "不要使用 markdown，不要分段，不要超过 45 个字。"
+            f"刚收到 {reward_points} 点积分作为生日奖励，这个数字只是背景，不必特意复述。"
+            "请写一句像真人顺手发在群里的中文祝福，语气自然、温暖一点。"
+            "允许更像聊天里的第一反应，不用把名字、奖励、触发词都复述一遍。"
+            "可以轻松一点、俏皮一点，但不要油腻，不要像公告或万能贺卡。"
+            f"{style_hint}"
+            "不要使用 markdown，不要分段，不要解释规则。"
+            "控制在 10 到 32 个字，最好一句，最多两句短句。"
         )
         try:
             llm_resp = await provider.text_chat(
@@ -39,11 +61,11 @@ class BirthdayFeatureMixin:
             )
             content = self._extract_llm_response_text(llm_resp)
             if content:
-                return self._single_line_message(content)
+                return self._freeform_reply_message(content)
         except Exception as exc:
             logger.warning(f"生日签到 LLM 祝福生成失败，已回退默认文案: {exc}")
 
-        return self._single_line_message(fallback)
+        return self._freeform_reply_message(fallback)
 
     async def _try_birthday_sign_in(
         self, event: AstrMessageEvent, message: str
@@ -105,11 +127,12 @@ class BirthdayFeatureMixin:
         blessing_text = await self._generate_birthday_blessing_text(
             event, reply_name, reward_points
         )
-        record_text = f"已自动为你记录生日 {today_md}，" if auto_recorded else ""
-        return self._single_line_message(
-            f"{record_text}{blessing_text}获得 {reward_points} {self._get_points_name()}，"
-            f"当前共有 {total_points} {self._get_points_name()}。"
+        record_text = f"顺手也帮你把生日记成 {today_md} 了。" if auto_recorded else ""
+        reward_text = (
+            f"{reward_points} {self._get_points_name()} 已到账，"
+            f"现在一共有 {total_points} {self._get_points_name()}。"
         )
+        return self._freeform_reply_message(f"{record_text}{blessing_text} {reward_text}")
 
     def _apply_birthday_reward_locked(
         self, user_info: Dict[str, Any], now: datetime.datetime | None = None
@@ -246,7 +269,6 @@ class BirthdayFeatureMixin:
                     group_info["last_birthday_broadcast_date"] = today_iso
             await self._save_data_locked()
 
-    @filter.command("生日签到")
     async def birthday_sign_in(self, event: AstrMessageEvent):
         """领取生日签到奖励；未记录生日时会自动记录为今天。"""
         birthday_cfg = self._get_birthday_settings()
@@ -264,7 +286,6 @@ class BirthdayFeatureMixin:
             )
         yield self._plain_result(event, birthday_message)
 
-    @filter.command("记录生日")
     async def record_birthday(self, event: AstrMessageEvent):
         """记录生日，格式：/记录生日 10/24"""
         raw_value = self._get_command_args(event)

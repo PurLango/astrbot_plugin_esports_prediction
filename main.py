@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import hashlib
 import json
 import os
 import random
@@ -9,7 +10,7 @@ from typing import Any, Dict
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import At, Reply
+from astrbot.api.message_components import At, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
@@ -23,7 +24,7 @@ except ImportError:
     from lottery_feature import LotteryFeatureMixin
 
 PLUGIN_NAME = "astrbot_plugin_point_system"
-DATA_VERSION = 7
+DATA_VERSION = 8
 DEFAULT_POINTS_NAME = "积分"
 GLOBAL_SIGN_IN_SCOPE_ID = "__global_sign_in__"
 DEFAULT_NEGATIVE_DEBT_MESSAGE = "你已背负债务，请穿上女仆装打工。"
@@ -41,13 +42,36 @@ LEGACY_DEFAULT_TEMPLATES = {
     "already_signed_in": "您今天已经签到过了，明天再来吧~",
     "query_points": "报告！您当前拥有 {total} {name}。",
 }
-DEFAULT_TEMPLATES = {
-    "sign_in_success": "{user}签到成功，获得 {points} {name}，当前共有 {total} {name}，连续签到 {streak} 天，累计签到 {total_sign_in_days} 天。",
-    "already_signed_in": "{user}今天已经签到过啦，当前共有 {total} {name}，连续签到 {streak} 天，累计签到 {total_sign_in_days} 天。",
-    "query_points": "{user}当前拥有 {total} {name}，连续签到 {streak} 天，累计签到 {total_sign_in_days} 天，今日状态：{sign_in_status}。",
+PREVIOUS_DEFAULT_TEMPLATES = {
+    "sign_in_success": "{user}签到成功，{points} {name}到账啦{bonus_detail}，现在一共有 {total} {name}，已连签 {streak} 天，累计签到 {total_sign_in_days} 天。",
+    "already_signed_in": "{user}今天已经签到过啦，现在有 {total} {name}，已连签 {streak} 天，累计签到 {total_sign_in_days} 天。",
+    "query_points": "{user}现在有 {total} {name}，已连签 {streak} 天，累计签到 {total_sign_in_days} 天，今日状态：{sign_in_status}。",
 }
-COMMAND_TEXT_PATTERN = re.compile(
-    r"^(?:签到|生日签到|记录生日|我的积分|积分榜|积分规则|抽奖|兑换头衔|兑换设精|兑换禁言|给积分|扣积分|清空所有数据)(?:\s|$)"
+DEFAULT_TEMPLATES = {
+    "sign_in_success": "{user}来签到了，拿到 {points} {name}{bonus_detail}，现在攒到 {total} {name} 了，已连签 {streak} 天，累计签到 {total_sign_in_days} 天。",
+    "already_signed_in": "{user}今天已经签过到啦，现在有 {total} {name}，已连签 {streak} 天，累计签到 {total_sign_in_days} 天。",
+    "query_points": "{user}这边查到你现在有 {total} {name}，已连签 {streak} 天，累计签到 {total_sign_in_days} 天，今日状态是 {sign_in_status}。",
+}
+COMMAND_PREFIXES = ("/", "!", "#", "。", "！", "／")
+REGISTERED_COMMAND_NAMES = (
+    "清空所有数据",
+    "兑换头衔",
+    "兑换设精",
+    "兑换禁言",
+    "兑换列表",
+    "兑换",
+    "记录生日",
+    "生日签到",
+    "群聊签到",
+    "我的积分",
+    "积分规则",
+    "积分榜",
+    "给积分",
+    "扣积分",
+    "抽奖",
+)
+REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
+    sorted(REGISTERED_COMMAND_NAMES, key=len, reverse=True)
 )
 
 
@@ -55,7 +79,7 @@ COMMAND_TEXT_PATTERN = re.compile(
     PLUGIN_NAME,
     "menglimi",
     "astrbot_plugin_point_system 是一个面向 AstrBot 群聊场景的积分互动插件，围绕“签到、活跃、抽奖、兑换、管理”这几类高频玩法设计。它支持按群维护成员信息、自动保存数据、定时备份、日期口令奖励，以及负分限制和群头衔联动，适合做群活跃体系或轻量积分经济。",
-    "1.8.6",
+    "2.0.0",
     "https://github.com/menglimi/astrbot_plugin_point_system",
 )
 class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
@@ -67,6 +91,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         self._backup_stop_event = asyncio.Event()
         self._birthday_broadcast_task: asyncio.Task | None = None
         self._birthday_broadcast_stop_event = asyncio.Event()
+        self.page_api = None
 
         self.data_dir = StarTools.get_data_dir(PLUGIN_NAME)
         self.data_file = os.path.join(self.data_dir, "points_data.json")
@@ -75,6 +100,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         self.data, migrated = self._load_data_sync()
         if migrated:
             self._write_data_sync()
+        self._register_page_api()
 
         try:
             loop = asyncio.get_running_loop()
@@ -86,11 +112,25 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
                 self._birthday_broadcast_loop()
             )
 
+    def _register_page_api(self) -> None:
+        if not callable(getattr(self.context, "register_web_api", None)):
+            logger.warning("[PointSystem] 当前 AstrBot 不支持插件拓展页 API")
+            return
+        try:
+            from .page_api import PointSystemPageApi
+
+            self.page_api = PointSystemPageApi(self)
+            self.page_api.register_routes()
+        except Exception as exc:
+            self.page_api = None
+            logger.warning(f"[PointSystem] 拓展页 API 注册失败: {exc}")
+
     def _new_store(self) -> Dict[str, Any]:
         return {
             "version": DATA_VERSION,
             "users": {},
             "groups": {},
+            "exchange_redemptions": [],
         }
 
     def _normalize_int(self, value: Any, default: int, minimum: int = 0) -> int:
@@ -118,6 +158,35 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
     def _normalize_text(self, value: Any) -> str:
         return value if isinstance(value, str) else ""
 
+    def _normalize_command_text(self, value: Any) -> str:
+        if value is None:
+            return ""
+        text = str(value).replace("\u3000", " ")
+        text = text.replace("\r", " ").replace("\n", " ")
+        return re.sub(r"\s+", " ", text).strip()
+
+    def _strip_command_prefix(self, text: str) -> str:
+        normalized = self._normalize_command_text(text)
+        while normalized.startswith(COMMAND_PREFIXES):
+            normalized = normalized[1:].lstrip()
+        return normalized
+
+    def _split_command_text(self, value: Any) -> tuple[str, str]:
+        command_text = self._strip_command_prefix(str(value) if value is not None else "")
+        if not command_text:
+            return "", ""
+
+        for command_name in REGISTERED_COMMAND_NAMES_BY_LENGTH:
+            if command_text == command_name:
+                return command_name, ""
+            if command_text.startswith(command_name):
+                next_char = command_text[len(command_name) : len(command_name) + 1]
+                if next_char and next_char.isspace():
+                    return command_name, command_text[len(command_name) :].strip()
+
+        head, _, tail = command_text.partition(" ")
+        return head.strip(), tail.strip()
+
     def _normalize_user_id(self, value: Any) -> str:
         return str(value).strip()
 
@@ -135,6 +204,62 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         if not parts:
             return ""
         return "，".join(parts) + "。"
+
+    def _freeform_reply_message(self, text: Any) -> str:
+        if text is None:
+            return ""
+        normalized = str(text).replace("\r", "\n").strip()
+        if not normalized:
+            return ""
+
+        normalized = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", normalized)
+        normalized = re.sub(r"`([^`]*)`", r"\1", normalized)
+        normalized = re.sub(r"\*\*([^*]+)\*\*", r"\1", normalized)
+        normalized = re.sub(r"\*([^*]+)\*", r"\1", normalized)
+        normalized = re.sub(r"__([^_]+)__", r"\1", normalized)
+        normalized = re.sub(r"_([^_]+)_", r"\1", normalized)
+        normalized = normalized.replace("\n", " ")
+        normalized = re.sub(r"\s+", " ", normalized)
+        normalized = re.sub(r"\s+([，。！？!?~～…])", r"\1", normalized).strip()
+        normalized = re.sub(r"([。！？!?])\1+", r"\1", normalized)
+        normalized = re.sub(r"(~|～){3,}", r"\1\1", normalized)
+        if not normalized:
+            return ""
+        if normalized[-1] not in "。！？!?~～…":
+            normalized += "。"
+        return normalized
+
+    def _pick_random_reply_variant(
+        self, options: list[str], default: str = ""
+    ) -> str:
+        candidates = [self._normalize_text(item).strip() for item in options]
+        candidates = [item for item in candidates if item]
+        if not candidates:
+            return default
+        return random.choice(candidates)
+
+    def _build_sign_in_fortune_fallback(
+        self, is_lucky: bool, points_delta: int, points_name: str
+    ) -> str:
+        if is_lucky:
+            return self._pick_random_reply_variant(
+                [
+                    f"这波也太欧了，白捡 {points_delta} {points_name} 属实离谱。",
+                    f"今天这手气像开挂了一样，顺手就多摸了 {points_delta} {points_name}。",
+                    f"谁把欧气全塞你这边了，一下就赚了 {points_delta} {points_name}。",
+                    f"这一下直接血赚 {points_delta} {points_name}，看得人都想蹭点运气。",
+                ],
+                default=f"今天这手气有点离谱，白捡了 {points_delta} {points_name}。",
+            )
+        return self._pick_random_reply_variant(
+            [
+                f"好消息是签到了，坏消息是欧气今天没上线，先掉了 {points_delta} {points_name}。",
+                f"今天像被命运顺手薅了一把，一下掉了 {points_delta} {points_name}。",
+                f"这波有点惨，刚签到就先交出去 {points_delta} {points_name}。",
+                f"手气像是睡过头了，被扣这 {points_delta} {points_name} 多少有点肉疼。",
+            ],
+            default=f"今天被命运轻轻绊了一下，掉了 {points_delta} {points_name}。",
+        )
 
     def _plain_result(self, event: AstrMessageEvent, text: Any):
         return event.plain_result(self._single_line_message(text))
@@ -175,6 +300,53 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             if text:
                 result.append(text)
         return result
+
+    def _normalize_delivery_contents(self, value: Any) -> list[str]:
+        if isinstance(value, str):
+            raw_items = value.splitlines()
+        elif isinstance(value, list):
+            raw_items = [str(item) for item in value]
+        else:
+            raw_items = []
+
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            content = str(item).strip()
+            if content and content not in seen:
+                seen.add(content)
+                result.append(content)
+        return result
+
+    def _exchange_content_fingerprint(self, content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def _normalize_exchange_redemptions(self, raw: Any) -> list[Dict[str, Any]]:
+        if not isinstance(raw, list):
+            return []
+
+        redemptions: list[Dict[str, Any]] = []
+        seen_hashes: set[str] = set()
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            content_hash = self._normalize_text(item.get("content_hash")).strip().lower()
+            if (
+                not re.fullmatch(r"[0-9a-f]{64}", content_hash)
+                or content_hash in seen_hashes
+            ):
+                continue
+            seen_hashes.add(content_hash)
+            redemptions.append(
+                {
+                    "content_hash": content_hash,
+                    "item_name": self._normalize_text(item.get("item_name")).strip(),
+                    "user_id": self._normalize_user_id(item.get("user_id", "")),
+                    "redeemed_at": self._normalize_text(item.get("redeemed_at")),
+                    "cost": self._normalize_int(item.get("cost"), 0, minimum=0),
+                }
+            )
+        return redemptions
 
     def _normalize_backup_paths(self, value: Any) -> list[str]:
         paths = self._normalize_string_list(value)
@@ -418,6 +590,9 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
 
             store["users"] = normalized_users
             store["groups"] = groups
+            store["exchange_redemptions"] = self._normalize_exchange_redemptions(
+                raw.get("exchange_redemptions", [])
+            )
             return store, migrated
 
         # 兼容旧版扁平结构：{user_id: user_record}
@@ -456,11 +631,13 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
                 except OSError:
                     pass
 
-    async def _save_data_locked(self) -> None:
+    async def _save_data_locked(self) -> bool:
         try:
             await asyncio.to_thread(self._write_data_sync)
+            return True
         except Exception as exc:
             logger.error(f"保存积分数据失败: {exc}")
+            return False
 
     def _build_backup_file_path(self, backup_path: str) -> str:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -661,6 +838,46 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             return extracted
         return self._get_sign_in_trigger_keyword()
 
+    def _append_unique_trigger(
+        self, variants: list[str], candidate: str
+    ) -> None:
+        if candidate and candidate not in variants:
+            variants.append(candidate)
+
+    def _append_trigger_keyword_variants(
+        self, variants: list[str], value: Any, action_word: str
+    ) -> None:
+        normalized = self._normalize_trigger_token(value)
+        if not normalized:
+            return
+
+        extracted = self._extract_trigger_keyword(normalized, action_word)
+        if normalized == action_word:
+            self._append_unique_trigger(variants, action_word)
+            return
+
+        if extracted and extracted != normalized:
+            self._append_unique_trigger(variants, normalized)
+            self._append_unique_trigger(variants, f"{extracted}{action_word}")
+            self._append_unique_trigger(variants, f"{action_word}{extracted}")
+            return
+
+        self._append_unique_trigger(variants, f"{normalized}{action_word}")
+        self._append_unique_trigger(variants, f"{action_word}{normalized}")
+
+    def _append_full_trigger_variants(
+        self, variants: list[str], value: Any, action_word: str
+    ) -> None:
+        normalized = self._normalize_trigger_token(value)
+        if not normalized:
+            return
+
+        self._append_unique_trigger(variants, normalized)
+        extracted = self._extract_trigger_keyword(normalized, action_word)
+        if extracted and extracted != normalized:
+            self._append_unique_trigger(variants, f"{extracted}{action_word}")
+            self._append_unique_trigger(variants, f"{action_word}{extracted}")
+
     def _get_action_trigger_variants(self, action_word: str) -> list[str]:
         keyword = (
             self._get_sign_in_trigger_keyword()
@@ -668,22 +885,16 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             else self._get_lottery_trigger_keyword()
         )
         variants: list[str] = []
-        if keyword:
-            variants.append(f"{keyword}{action_word}")
-            variants.append(f"{action_word}{keyword}")
+        self._append_trigger_keyword_variants(variants, keyword, action_word)
 
         if action_word == "签到":
-            legacy_exact = self._normalize_trigger_token(
-                self.config.get("sign_in_trigger", "")
+            self._append_full_trigger_variants(
+                variants, self.config.get("sign_in_trigger", ""), action_word
             )
-            if legacy_exact and legacy_exact not in variants:
-                variants.append(legacy_exact)
         elif action_word == "抽奖":
-            legacy_exact = self._normalize_trigger_token(
-                self.config.get("lottery_trigger", "")
+            self._append_full_trigger_variants(
+                variants, self.config.get("lottery_trigger", ""), action_word
             )
-            if legacy_exact and legacy_exact not in variants:
-                variants.append(legacy_exact)
         return variants
 
     def _get_sign_in_triggers(self) -> list[str]:
@@ -691,6 +902,43 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
 
     def _get_lottery_triggers(self) -> list[str]:
         return self._get_action_trigger_variants("抽奖")
+
+    def _iter_quick_action_message_candidates(
+        self, event: AstrMessageEvent, message: str | None = None
+    ) -> list[str]:
+        candidates: list[str] = []
+        for candidate in (
+            message,
+            self._get_event_plain_text(event),
+            getattr(getattr(event, "message_obj", None), "message_str", ""),
+            getattr(event, "message_str", ""),
+        ):
+            normalized = self._normalize_trigger_token(candidate)
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+        return candidates
+
+    def _match_quick_action_from_event(
+        self, event: AstrMessageEvent, message: str | None = None
+    ) -> str | None:
+        candidates = self._iter_quick_action_message_candidates(event, message)
+        sign_in_triggers = self._get_sign_in_triggers()
+        lottery_triggers = self._get_lottery_triggers()
+
+        for candidate in candidates:
+            if candidate in sign_in_triggers:
+                return "sign_in"
+            if candidate in lottery_triggers:
+                return "lottery"
+
+        is_wake_command = bool(getattr(event, "is_at_or_wake_command", False))
+        if is_wake_command:
+            for candidate in candidates:
+                if candidate == "签到":
+                    return "sign_in"
+                if candidate == "抽奖":
+                    return "lottery"
+        return None
 
     def _match_quick_action(self, message: str) -> str | None:
         normalized = self._normalize_trigger_token(message)
@@ -815,6 +1063,116 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             ),
         }
 
+    def _get_exchange_items(self) -> list[Dict[str, Any]]:
+        raw_items = self.config.get("exchange_items", [])
+        if not isinstance(raw_items, list):
+            return []
+
+        items: list[Dict[str, Any]] = []
+        seen_names: set[str] = set()
+        seen_contents: set[str] = set()
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            name = self._normalize_command_text(raw_item.get("name"))
+            normalized_name = name.casefold()
+            if not name or normalized_name in seen_names:
+                continue
+            seen_names.add(normalized_name)
+            contents = [
+                content
+                for content in self._normalize_delivery_contents(
+                    raw_item.get("contents", [])
+                )
+                if content not in seen_contents
+            ]
+            seen_contents.update(contents)
+            items.append(
+                {
+                    "name": name,
+                    "enabled": bool(raw_item.get("enabled", True)),
+                    "cost": self._normalize_int(raw_item.get("cost"), 100, minimum=1),
+                    "contents": contents,
+                    "private_only": bool(raw_item.get("private_only", True)),
+                    "success_template": self._normalize_text(
+                        raw_item.get("success_template")
+                    ).strip()
+                    or (
+                        "兑换成功！\n兑换物：{item}\n兑换内容：{content}\n"
+                        "消耗 {cost} {points_name}，剩余 {remaining} {points_name}。"
+                    ),
+                }
+            )
+        return items
+
+    def _get_exchange_scope(self) -> Dict[str, Any]:
+        """读取自定义兑换物的全局适用范围。"""
+        raw_scope = self.config.get("exchange_scope", {})
+        if not isinstance(raw_scope, dict):
+            raw_scope = {}
+
+        mode_value = self._normalize_command_text(raw_scope.get("mode")).casefold()
+        mode = (
+            "whitelist"
+            if mode_value in {"whitelist", "white", "allow", "白名单", "允许"}
+            else "blacklist"
+        )
+        raw_values = raw_scope.get("scope", raw_scope.get("group_ids", []))
+        values: list[str] = []
+        seen: set[str] = set()
+        for value in self._normalize_string_list(raw_values):
+            normalized = self._normalize_command_text(value).casefold()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                values.append(normalized)
+        return {"mode": mode, "scope": values}
+
+    def _is_exchange_scope_allowed(
+        self, event: AstrMessageEvent, user_id: str | None = None
+    ) -> bool:
+        """判断当前群或账号是否可以使用自定义兑换物。"""
+        scope_config = self._get_exchange_scope()
+        scope = set(scope_config["scope"])
+        if not scope:
+            return scope_config["mode"] == "blacklist"
+
+        current_user_id = self._normalize_user_id(
+            user_id if user_id is not None else event.get_sender_id()
+        )
+        current_values = {
+            current_user_id.casefold(),
+            f"user:{current_user_id}".casefold(),
+        }
+        group_id = self._get_group_id(event)
+        group_ids = [group_id] if group_id else []
+        # 私聊事件没有群号时，沿用已记录的群关系，方便白名单群用户私聊领取。
+        if not group_id and current_user_id:
+            group_ids.extend(self._collect_user_group_ids(current_user_id))
+        for current_group_id in group_ids:
+            if current_group_id:
+                current_values.add(current_group_id.casefold())
+                current_values.add(f"group:{current_group_id}".casefold())
+
+        matched = bool(current_values.intersection(scope))
+        return matched if scope_config["mode"] == "whitelist" else not matched
+
+    def _find_exchange_item(
+        self, raw_name: str, items: list[Dict[str, Any]]
+    ) -> tuple[Dict[str, Any] | None, bool]:
+        query = self._normalize_command_text(raw_name).casefold()
+        if not query:
+            return None, False
+
+        enabled_items = [item for item in items if item["enabled"]]
+        for item in enabled_items:
+            if item["name"].casefold() == query:
+                return item, False
+
+        matches = [item for item in enabled_items if query in item["name"].casefold()]
+        if len(matches) == 1:
+            return matches[0], False
+        return None, len(matches) > 1
+
     def _get_negative_settings(self) -> Dict[str, Any]:
         negative_cfg = self.config.get("negative_settings", {})
         if not isinstance(negative_cfg, dict):
@@ -887,7 +1245,10 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             configured = templates.get(key)
             if not isinstance(configured, str) or not configured.strip():
                 continue
-            if configured == LEGACY_DEFAULT_TEMPLATES.get(key):
+            if configured in {
+                LEGACY_DEFAULT_TEMPLATES.get(key),
+                PREVIOUS_DEFAULT_TEMPLATES.get(key),
+            }:
                 resolved[key] = fallback
             else:
                 resolved[key] = configured
@@ -914,6 +1275,28 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
 
     def _get_message_segments(self, event: AstrMessageEvent) -> list[Any]:
         return list(getattr(event.message_obj, "message", []) or [])
+
+    def _get_event_plain_text(self, event: AstrMessageEvent) -> str:
+        segments = self._get_message_segments(event)
+        plain_parts: list[str] = []
+        for segment in segments:
+            if isinstance(segment, Plain):
+                text = self._normalize_text(getattr(segment, "text", ""))
+                if text:
+                    plain_parts.append(text)
+
+        plain_text = "".join(plain_parts).strip()
+        if plain_text:
+            return plain_text
+
+        message_obj = getattr(event, "message_obj", None)
+        message_obj_text = self._normalize_text(
+            getattr(message_obj, "message_str", "")
+        ).strip()
+        if message_obj_text:
+            return message_obj_text
+
+        return self._normalize_text(getattr(event, "message_str", "")).strip()
 
     def _get_group_id(self, event: AstrMessageEvent) -> str:
         group_id = event.get_group_id()
@@ -1062,11 +1445,12 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             return False
 
     def _get_command_args(self, event: AstrMessageEvent) -> str:
-        return (event.message_str or "").partition(" ")[2].strip()
+        _, args = self._split_command_text(event.message_str or "")
+        return args
 
     def _get_command_name(self, event: AstrMessageEvent) -> str:
-        head = (event.message_str or "").strip().split(maxsplit=1)[0]
-        return head.lstrip("/") or "该命令"
+        command_name, _ = self._split_command_text(event.message_str or "")
+        return command_name or "该命令"
 
     def _ensure_qq_group_exchange(
         self, event: AstrMessageEvent, action_name: str
@@ -1148,14 +1532,20 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             )
 
     def _is_command_like_message(self, message: str) -> bool:
-        stripped = message.strip()
+        stripped = self._normalize_command_text(message)
         if not stripped:
             return True
-        if stripped.startswith(("/", "!", "#", "。", "！")):
+        if stripped.startswith(COMMAND_PREFIXES):
             return True
         if self._match_quick_action(stripped):
             return True
-        return bool(COMMAND_TEXT_PATTERN.match(stripped))
+        if stripped == self._normalize_command_text(
+            self._get_birthday_settings()["sign_in_trigger"]
+        ):
+            return True
+
+        command_name, _ = self._split_command_text(stripped)
+        return command_name in REGISTERED_COMMAND_NAMES
 
     def _build_sign_in_bonus_detail(
         self,
@@ -1203,21 +1593,34 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             logger.debug(f"获取签到彩蛋 LLM provider 失败: {exc}")
 
         title = "欧皇" if is_lucky else "非酋"
-        direction_text = "额外获得" if is_lucky else "被扣除"
-        fallback = (
-            f"{reply_name}触发了稀有签到事件【{title}】，"
-            f"{direction_text} {points_delta} {self._get_points_name()}。"
-            f"当前共有 {total_points} {self._get_points_name()}。"
+        points_name = self._get_points_name()
+        fallback = self._build_sign_in_fortune_fallback(
+            is_lucky, points_delta, points_name
         )
         if not provider:
-            return self._single_line_message(fallback)
+            return self._freeform_reply_message(fallback)
 
+        style_hint = self._pick_random_reply_variant(
+            [
+                "偏像群友路过时顺手接一句，短一点。",
+                "偏像熟人看到后的第一反应，带一点俏皮吐槽。",
+                "偏像旁边人在起哄，轻松一点就好。",
+                "偏像朋友随口补一句，别太完整，别太端着。",
+            ],
+            default="像熟人顺手接一句，别太端着。",
+        )
         prompt = (
-            f"用户 {reply_name} 在签到时触发了一个极低概率事件，身份是“{title}”。"
-            f"本次{'增加' if is_lucky else '减少'}了 {points_delta} 点积分，"
-            f"当前总积分为 {total_points}。"
-            "请用一句到两句简短、有趣、适合群聊的中文回复。"
-            "不要使用 markdown，不要解释规则，不要超过 45 个字。"
+            "你在一个很熟的中文群里当群友，看见有人签到触发彩蛋后顺手接一句。"
+            f"当事人是 {reply_name}，触发的是“{title}”，"
+            f"这次{'白赚了' if is_lucky else '被扣了'} {points_delta} 点积分。"
+            f"当前总积分 {total_points} 只是背景信息，除非特别自然，否则不要重复报数字。"
+            "直接输出群里要发出去的那句话。"
+            "像真人第一反应，允许只抓一个重点，不用把事情复述完整。"
+            "可以带一点口语、语气词、轻微调侃或夸张，但别油腻，也别像客服或播报。"
+            "避免“签到成功”“当前共有”“触发了事件”这类整齐句式。"
+            f"{style_hint}"
+            "不要使用 markdown，不要分点，不要加引号，不要解释规则。"
+            "长度控制在 10 到 32 个字，最好一句，最多两句短句。"
         )
 
         try:
@@ -1228,11 +1631,11 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             )
             content = self._extract_llm_response_text(llm_resp)
             if content:
-                return self._single_line_message(content)
+                return self._freeform_reply_message(content)
         except Exception as exc:
             logger.warning(f"签到彩蛋 LLM 回复失败，已回退默认文案: {exc}")
 
-        return self._single_line_message(fallback)
+        return self._freeform_reply_message(fallback)
 
     def _resolve_fortune_event_type(
         self, user_info: Dict[str, Any], sign_cfg: Dict[str, Any]
@@ -1754,10 +2157,28 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             )
         )
 
-    @filter.command("签到")
+    @filter.command("群聊签到")
     async def sign_in(self, event: AstrMessageEvent):
         """每日签到以获取积分奖励。"""
         async for result in self._handle_sign_in(event):
+            yield result
+
+    @filter.command("抽奖")
+    async def lottery_command(self, event: AstrMessageEvent):
+        """桥接抽奖命令，确保继承自 mixin 的命令在插件主类中可被框架发现。"""
+        async for result in LotteryFeatureMixin.lottery(self, event):
+            yield result
+
+    @filter.command("生日签到")
+    async def birthday_sign_in_command(self, event: AstrMessageEvent):
+        """桥接生日签到命令，避免框架遗漏注册 mixin 中的命令方法。"""
+        async for result in BirthdayFeatureMixin.birthday_sign_in(self, event):
+            yield result
+
+    @filter.command("记录生日")
+    async def record_birthday_command(self, event: AstrMessageEvent):
+        """桥接记录生日命令，避免框架遗漏注册 mixin 中的命令方法。"""
+        async for result in BirthdayFeatureMixin.record_birthday(self, event):
             yield result
 
     @filter.command("我的积分")
@@ -1801,6 +2222,9 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         activity_cfg = self._get_activity_settings()
         lottery_cfg = self._get_lottery_settings()
         special_reward_entries = self._get_special_date_reward_entries()
+        exchange_items = [
+            item for item in self._get_exchange_items() if item["enabled"]
+        ]
         sign_in_triggers = self._get_sign_in_triggers()
         lottery_triggers = self._get_lottery_triggers()
         sign_in_examples = " / ".join(f"“{item}”" for item in sign_in_triggers[:2])
@@ -1892,17 +2316,23 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
                 [entry for entry in special_reward_entries if entry["enabled"]]
             )
             lines.append(f"14. 日期口令奖励：当前启用 {enabled_entry_count} 条词条")
+        if exchange_items:
+            lines.append(
+                f"15. 自定义兑换物：当前有 {len(exchange_items)} 种，"
+                "发送 /兑换列表 查看价格和库存"
+            )
+        negative_rule_no = 16 if exchange_items else 15
         lines.append(
-            "15. 负分规则：负分用户只能通过每日签到恢复积分，无法参与抽奖；"
+            f"{negative_rule_no}. 负分规则：负分用户只能通过每日签到恢复积分，无法参与抽奖；"
             "在已记录群聊中会自动佩戴“群女仆X号”头衔，转正后自动移除。"
         )
         yield self._plain_result(event, "；".join(lines))
 
-    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=100000)
     async def on_group_message_gain_points(self, event: AstrMessageEvent):
-        """处理无前缀签到、日期口令奖励与群聊活跃奖励。"""
-        message = (event.message_str or "").strip()
-        quick_action = self._match_quick_action(message)
+        """处理无前缀签到、无前缀抽奖、日期口令奖励与群聊活跃奖励。"""
+        message = self._get_event_plain_text(event)
+        quick_action = self._match_quick_action_from_event(event, message)
         if quick_action == "sign_in":
             event.stop_event()
             async for result in self._handle_sign_in(event):
@@ -1910,7 +2340,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             return
         if quick_action == "lottery":
             event.stop_event()
-            async for result in self.lottery(event):
+            async for result in self._handle_lottery(event, raw_args=""):
                 yield result.stop_event()
             return
 
@@ -2095,10 +2525,216 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             )
             return
 
-        yield self._plain_result(event, 
+        yield self._plain_result(event,
             f"兑换成功，已将您的群头衔设置为【{raw_title}】。"
             f"消耗 {exchange_cfg['title_cost']} {points_name}，剩余 {remaining_points} {points_name}。"
         )
+
+    @filter.command("兑换列表")
+    async def exchange_item_list(self, event: AstrMessageEvent):
+        """查看管理员配置的通用积分兑换物。"""
+        all_enabled_items = [
+            item for item in self._get_exchange_items() if item["enabled"]
+        ]
+        sender_id = str(event.get_sender_id())
+        scope_allowed = self._is_exchange_scope_allowed(event, sender_id)
+        items = all_enabled_items if scope_allowed else []
+        points_name = self._get_points_name()
+
+        if not items:
+            if all_enabled_items and not scope_allowed:
+                yield self._plain_result(
+                    event,
+                    "当前兑换范围未开放给你所在的群或账号。"
+                    "如需参与，请联系管理员调整适用范围。",
+                )
+                return
+            yield self._plain_result(
+                event,
+                "当前还没有已上架的兑换物。管理员可在“插件 → 群积分助手 → "
+                "兑换管理”中创建并启用兑换物。",
+            )
+            return
+
+        async with self._data_lock:
+            group_member_changed = self._touch_group_member(
+                event, sender_id, self._get_sender_display_name(event)
+            )
+            if group_member_changed:
+                await self._save_data_locked()
+            redeemed_hashes = {
+                item.get("content_hash")
+                for item in self.data.get("exchange_redemptions", [])
+                if isinstance(item, dict)
+            }
+            lines = ["【积分兑换列表】"]
+            available_count = 0
+            for index, item in enumerate(items, start=1):
+                stock = sum(
+                    1
+                    for content in item["contents"]
+                    if self._exchange_content_fingerprint(content)
+                    not in redeemed_hashes
+                )
+                if stock:
+                    available_count += 1
+                stock_text = f"库存 {stock}" if stock else "暂时缺货"
+                private_hint = " · 私聊领取" if item["private_only"] else ""
+                lines.append(
+                    f"{index}. {item['name']}：{item['cost']} {points_name} · "
+                    f"{stock_text}{private_hint}"
+                )
+            if available_count:
+                lines.append("兑换方式：/兑换 兑换物名称")
+            else:
+                lines.append("当前所有兑换物都在补货中，稍后再来看看吧。")
+
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("兑换")
+    async def exchange_item(self, event: AstrMessageEvent):
+        """消耗积分兑换管理员配置的兑换物。用法：/兑换 兑换物名称"""
+        items = self._get_exchange_items()
+        points_name = self._get_points_name()
+        raw_name = self._get_command_args(event)
+        query = self._normalize_command_text(raw_name)
+        all_enabled_items = [item for item in items if item["enabled"]]
+        sender_id = str(event.get_sender_id())
+        scope_allowed = self._is_exchange_scope_allowed(event, sender_id)
+        enabled_items = all_enabled_items if scope_allowed else []
+
+        if all_enabled_items and not scope_allowed:
+            yield self._plain_result(
+                event,
+                "当前兑换范围未开放给你所在的群或账号。"
+                "如需参与，请联系管理员调整适用范围。",
+            )
+            return
+
+        if not query:
+            if enabled_items:
+                yield event.plain_result(
+                    "请在 /兑换 后填写兑换物名称。\n"
+                    f"例如：/兑换 {enabled_items[0]['name']}\n"
+                    "发送 /兑换列表 可查看全部名称、价格和库存。"
+                )
+            else:
+                yield self._plain_result(
+                    event,
+                    "当前还没有已上架的兑换物，请稍后再试。管理员可在“插件 → "
+                    "群积分助手 → 兑换管理”中添加。",
+                )
+            return
+
+        item, ambiguous = self._find_exchange_item(query, enabled_items)
+
+        if item is None:
+            if ambiguous:
+                normalized_query = query.casefold()
+                matches = [
+                    candidate["name"]
+                    for candidate in enabled_items
+                    if normalized_query in candidate["name"].casefold()
+                ]
+                displayed = "、".join(f"【{name}】" for name in matches[:4])
+                more_hint = f"等 {len(matches)} 项" if len(matches) > 4 else ""
+                message = (
+                    f"“{query}”匹配到多个兑换物：{displayed}{more_hint}。"
+                    f"请填写完整名称，例如：/兑换 {matches[0]}。"
+                )
+            else:
+                message = (
+                    f"没有找到【{query}】。名称可能有误或尚未上架；"
+                    "发送 /兑换列表 可查看当前名称和库存。"
+                )
+            yield self._plain_result(event, message)
+            return
+
+        if item["private_only"] and self._get_group_id(event):
+            async with self._data_lock:
+                group_member_changed = self._touch_group_member(
+                    event, sender_id, self._get_sender_display_name(event)
+                )
+                if group_member_changed:
+                    await self._save_data_locked()
+            yield event.plain_result(
+                f"【{item['name']}】会通过私聊发放，本次尚未扣除积分。\n"
+                f"请打开与机器人的私聊并发送：/兑换 {item['name']}"
+            )
+            return
+
+        delivered_content = ""
+        remaining_points = 0
+        result_error = ""
+
+        async with self._data_lock:
+            user_info = self._get_user_record(sender_id)
+            redemptions = self.data.setdefault("exchange_redemptions", [])
+            redeemed_hashes = {
+                record.get("content_hash")
+                for record in redemptions
+                if isinstance(record, dict)
+            }
+            for content in item["contents"]:
+                if self._exchange_content_fingerprint(content) not in redeemed_hashes:
+                    delivered_content = content
+                    break
+
+            if not delivered_content:
+                result_error = (
+                    f"【{item['name']}】暂时没有可用库存，本次未扣除积分。"
+                    "可发送 /兑换列表 查看其他兑换物，或稍后再试。"
+                )
+            elif user_info["points"] < item["cost"]:
+                missing_points = item["cost"] - user_info["points"]
+                result_error = (
+                    f"积分不足，兑换【{item['name']}】需要 {item['cost']} {points_name}，"
+                    f"您当前有 {user_info['points']} {points_name}，"
+                    f"还差 {missing_points} {points_name}；本次未扣除积分。"
+                )
+                delivered_content = ""
+            else:
+                user_info["points"] -= item["cost"]
+                remaining_points = user_info["points"]
+                redemption = {
+                    "content_hash": self._exchange_content_fingerprint(
+                        delivered_content
+                    ),
+                    "item_name": item["name"],
+                    "user_id": sender_id,
+                    "redeemed_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                    "cost": item["cost"],
+                }
+                redemptions.append(redemption)
+                if not await self._save_data_locked():
+                    redemptions.pop()
+                    user_info["points"] += item["cost"]
+                    delivered_content = ""
+                    result_error = "兑换记录保存失败，本次未扣除积分，请稍后再试。"
+
+        if result_error:
+            yield self._plain_result(event, result_error)
+            return
+
+        template = item["success_template"]
+        if "{content}" not in template:
+            template += "\n兑换内容：{content}"
+        try:
+            message = template.format(
+                item=item["name"],
+                content=delivered_content,
+                cost=item["cost"],
+                points_name=points_name,
+                remaining=remaining_points,
+            )
+        except (KeyError, ValueError):
+            message = (
+                f"兑换成功！\n兑换物：{item['name']}\n"
+                f"兑换内容：{delivered_content}\n"
+                f"消耗 {item['cost']} {points_name}，"
+                f"剩余 {remaining_points} {points_name}。"
+            )
+        yield event.plain_result(message)
 
     @filter.command("兑换设精")
     async def exchange_essence(self, event: AstrMessageEvent):
@@ -2235,7 +2871,8 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         if self._normalize_text(self._get_command_args(event)) != "确认":
             yield self._plain_result(
                 event,
-                "该操作会清空所有积分、抽奖、生日和群记录，请发送 /清空所有数据 确认 继续。",
+                "该操作会清空所有积分、抽奖、生日和群记录（已发放兑换物记录会保留），"
+                "请发送 /清空所有数据 确认 继续。",
             )
             return
 
@@ -2245,7 +2882,9 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         async with self._data_lock:
             old_user_count = len(self.data.get("users", {}))
             old_group_count = len(self.data.get("groups", {}))
+            exchange_redemptions = self.data.get("exchange_redemptions", [])
             self.data = self._new_store()
+            self.data["exchange_redemptions"] = exchange_redemptions
             await self._save_data_locked()
 
         if log_operations:
@@ -2317,6 +2956,8 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
 
     async def terminate(self):
         """插件卸载时保存一次数据"""
+        if self.page_api is not None:
+            self.page_api.unregister_routes()
         self._backup_stop_event.set()
         self._birthday_broadcast_stop_event.set()
         if self._backup_task is not None:
@@ -2333,8 +2974,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
                 pass
 
         async with self._data_lock:
-            try:
-                await self._save_data_locked()
+            if await self._save_data_locked():
                 logger.info("积分系统数据已安全保存。")
-            except Exception as exc:
-                logger.error(f"卸载保存积分数据失败: {exc}")
+            else:
+                logger.error("卸载保存积分数据失败。")

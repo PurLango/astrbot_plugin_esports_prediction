@@ -4,7 +4,7 @@ import re
 from typing import Any, Dict
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent
 
 
 DEFAULT_PERSONAL_LOTTERY_PRIZES = {
@@ -287,9 +287,10 @@ class LotteryFeatureMixin:
             f"上一轮群体抽奖因跨日仍未满员，已自动退还 {refunded_count} 名参与者的报名积分。"
         )
 
-    @filter.command("抽奖")
-    async def lottery(self, event: AstrMessageEvent):
-        """消耗积分进行一次抽奖。"""
+    async def _handle_lottery(
+        self, event: AstrMessageEvent, raw_args: str | None = None
+    ):
+        """处理抽奖逻辑，同时兼容命令调用与无前缀触发。"""
         lottery_cfg = self._get_lottery_settings()
         points_name = self._get_points_name()
 
@@ -297,7 +298,8 @@ class LotteryFeatureMixin:
             yield self._plain_result(event, "当前未开启积分抽奖功能。")
             return
 
-        mode = self._resolve_lottery_mode(self._get_command_args(event), lottery_cfg)
+        mode_args = raw_args if raw_args is not None else self._get_command_args(event)
+        mode = self._resolve_lottery_mode(mode_args, lottery_cfg)
         if mode == "personal" and not lottery_cfg["personal_enabled"]:
             yield self._plain_result(event, "当前未开启个人抽奖，请使用 /抽奖 群体 或在配置中打开个人抽奖开关。")
             return
@@ -524,3 +526,8 @@ class LotteryFeatureMixin:
                         message = "；".join(lines)
 
         yield self._plain_result(event, self._single_line_message(message))
+
+    async def lottery(self, event: AstrMessageEvent):
+        """消耗积分进行一次抽奖。"""
+        async for result in self._handle_lottery(event):
+            yield result

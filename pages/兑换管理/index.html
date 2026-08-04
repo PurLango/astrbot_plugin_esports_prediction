@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>积分兑换台</title>
+  <link rel="stylesheet" href="./app.css" />
+  <script src="./lucide.min.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><i data-lucide="ticket-check"></i></span>
+        <div><h1>积分兑换台</h1><p>兑换物与库存管理</p></div>
+      </div>
+      <div class="top-actions">
+        <span id="saveState" class="save-state" aria-live="polite" hidden><i data-lucide="circle-dot"></i><span id="saveStateText">有未保存修改</span></span>
+        <span id="connectionState" class="connection-state"><i data-lucide="loader-circle"></i>连接中</span>
+        <button id="refreshButton" class="icon-button" type="button" title="刷新数据" aria-label="刷新数据"><i data-lucide="refresh-cw"></i></button>
+        <button id="themeButton" class="icon-button" type="button" title="切换主题" aria-label="切换主题"><i data-lucide="sun-moon"></i></button>
+        <button id="saveButton" class="primary-button" type="button" title="保存修改（Ctrl+S）" disabled><i data-lucide="save"></i><span id="saveButtonText">保存修改</span></button>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <section class="metric-band" aria-label="兑换概览">
+        <div class="metric"><span class="metric-icon green"><i data-lucide="package-open"></i></span><span><small>可用库存</small><strong id="stockMetric">—</strong></span></div>
+        <div class="metric"><span class="metric-icon indigo"><i data-lucide="layers-3"></i></span><span><small>启用兑换物</small><strong id="itemMetric">—</strong></span></div>
+        <div class="metric"><span class="metric-icon amber"><i data-lucide="badge-check"></i></span><span><small>累计发放</small><strong id="redeemedMetric">—</strong></span></div>
+        <div class="metric"><span class="metric-icon rose"><i data-lucide="circle-dollar-sign"></i></span><span><small>累计消耗</small><strong id="spentMetric">—</strong></span></div>
+      </section>
+
+      <section class="scope-panel" aria-labelledby="scopeTitle">
+        <div class="scope-copy">
+          <span class="section-kicker">适用范围</span>
+          <h2 id="scopeTitle">谁可以兑换</h2>
+          <p id="scopeSummary">黑名单为空，所有群和账号可兑换</p>
+        </div>
+        <div class="scope-controls">
+          <div class="scope-mode" role="group" aria-label="范围模式">
+            <button type="button" data-scope-mode="blacklist" aria-pressed="true"><i data-lucide="user-round-minus"></i>黑名单</button>
+            <button type="button" data-scope-mode="whitelist" aria-pressed="false"><i data-lucide="user-round-check"></i>白名单</button>
+          </div>
+          <label class="field scope-field">
+            <span class="field-label"><b>群号或账号</b><small>一行一个，也可填写 group: / user:</small></span>
+            <textarea id="scopeValues" rows="2" placeholder="例如：&#10;123456789&#10;group:987654321"></textarea>
+            <small id="scopeHint" class="scope-hint">黑名单中的群或账号无法兑换；留空表示不限制</small>
+          </label>
+        </div>
+      </section>
+
+      <div class="view-tabs" role="tablist" aria-label="管理视图">
+        <button class="view-tab active" type="button" role="tab" aria-selected="true" data-view="inventory"><i data-lucide="boxes"></i>兑换物</button>
+        <button class="view-tab" type="button" role="tab" aria-selected="false" data-view="records"><i data-lucide="receipt-text"></i>兑换记录 <span id="recordCount">0</span></button>
+      </div>
+
+      <section id="inventoryView" class="view active" data-view-panel="inventory">
+        <div class="inventory-layout">
+          <aside class="item-sidebar" aria-label="兑换物列表">
+            <div class="sidebar-toolbar">
+              <label class="search-box"><i data-lucide="search"></i><input id="itemSearch" type="search" placeholder="搜索兑换物" autocomplete="off" /></label>
+              <button id="addItemButton" class="compact-button accent" type="button" title="新增兑换物"><i data-lucide="plus"></i><span>新增</span></button>
+            </div>
+            <div id="itemList" class="item-list" aria-live="polite"></div>
+          </aside>
+
+          <section class="editor-surface" aria-live="polite">
+            <div id="editorEmpty" class="empty-state">
+              <span class="empty-icon"><i data-lucide="package-plus"></i></span>
+              <div class="empty-copy">
+                <span class="section-kicker">快速开始</span>
+                <h2>创建第一个兑换物</h2>
+                <p>填写名称和所需积分，再粘贴要发放的内容，保存后即可供用户兑换。</p>
+              </div>
+              <ol class="onboarding-steps">
+                <li><b>1</b><span>设置名称<br /><small>用户看到的标题</small></span></li>
+                <li><b>2</b><span>添加内容<br /><small>一行作为一份库存</small></span></li>
+                <li><b>3</b><span>保存生效<br /><small>随时可以继续补货</small></span></li>
+              </ol>
+              <div class="empty-actions">
+                <button class="primary-button" type="button" data-action="add-item"><i data-lucide="plus"></i>从空白创建</button>
+                <button class="quiet-button" type="button" data-action="add-example"><i data-lucide="wand-sparkles"></i>载入填写示例</button>
+              </div>
+              <small class="empty-footnote">示例默认不启用，确认内容后再保存即可。</small>
+            </div>
+
+            <form id="itemEditor" class="item-editor" hidden>
+              <div class="editor-heading">
+                <div><span class="section-kicker">兑换物配置</span><h2 id="editorTitle">兑换物</h2></div>
+                <div class="editor-actions">
+                  <label class="status-toggle"><input id="itemEnabled" type="checkbox" /><span></span><b>启用</b></label>
+                  <button id="deleteItemButton" class="icon-button danger" type="button" title="删除兑换物" aria-label="删除兑换物"><i data-lucide="trash-2"></i></button>
+                </div>
+              </div>
+
+              <div class="form-grid">
+                <label class="field field-wide">
+                  <span class="field-label"><b>兑换物名称</b><small>用户在兑换列表中看到的名称</small></span>
+                  <input id="itemName" type="text" maxlength="120" placeholder="例如：新人礼包、抽奖机会、月度权益" required />
+                  <small id="itemNameError" class="field-error" hidden></small>
+                </label>
+                <label class="field">
+                  <span class="field-label"><b>每次兑换消耗</b><small>至少为 1</small></span>
+                  <div class="input-suffix"><input id="itemCost" type="number" min="1" max="1000000000" inputmode="numeric" required /><b id="pointsNameSuffix">积分</b></div>
+                  <small id="itemCostError" class="field-error" hidden></small>
+                </label>
+                <label class="toggle-field"><span><b>通过私聊发送内容</b><small>内容需要保密时建议开启；关闭后会在当前会话发送</small></span><input id="itemPrivate" type="checkbox" aria-label="通过私聊发送内容" /></label>
+              </div>
+
+              <section class="inventory-editor">
+                <div class="section-heading">
+                  <div><span class="section-kicker">发放设置</span><h3>每次发送一份内容</h3><p>兑换成功后会从可用库存中取出一行。</p></div>
+                  <div class="stock-summary"><span><b id="availableStock">0</b> 可用</span><span><b id="usedStock">0</b> 已发</span><span><b id="totalStock">0</b> 总计</span></div>
+                </div>
+                <div class="paste-guide"><i data-lucide="clipboard-paste"></i><span><b>批量添加：</b>从 Excel、表格或文本复制一列后直接粘贴。空行与重复内容会自动忽略。</span></div>
+                <label class="field">
+                  <textarea id="itemContents" rows="11" spellcheck="false" placeholder="每行一份内容，例如：&#10;奖励内容 001&#10;奖励内容 002&#10;奖励内容 003"></textarea>
+                  <span class="content-footer"><small id="contentMeta">还没有可发放内容</small><button id="cleanContentsButton" class="text-button" type="button">整理内容</button></span>
+                </label>
+              </section>
+
+              <section class="message-editor">
+                <div class="section-heading"><div><span class="section-kicker">用户反馈</span><h3>兑换成功后发送的消息</h3><p>可在消息中插入下方变量，发送时会替换成实际内容。</p></div><button id="resetTemplateButton" class="text-button" type="button">恢复默认</button></div>
+                <label class="field"><textarea id="successTemplate" rows="5" maxlength="4000"></textarea></label>
+                <div class="variable-row" aria-label="可用变量">
+                  <span>点击插入：</span><button type="button" data-variable="{item}" title="兑换物名称">{item}</button><button type="button" data-variable="{content}" title="本次发放内容">{content}</button><button type="button" data-variable="{cost}" title="消耗积分">{cost}</button><button type="button" data-variable="{points_name}" title="积分名称">{points_name}</button><button type="button" data-variable="{remaining}" title="剩余积分">{remaining}</button>
+                </div>
+                <div class="template-preview">
+                  <span><i data-lucide="message-square-text"></i>发送效果预览</span>
+                  <pre id="templatePreview"></pre>
+                </div>
+              </section>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section id="recordsView" class="view" data-view-panel="records" hidden>
+        <div class="records-toolbar">
+          <div><span class="section-kicker">兑换流水</span><h2>兑换记录</h2></div>
+          <label class="search-box record-search"><i data-lucide="search"></i><input id="recordSearch" type="search" placeholder="搜索兑换物或用户 ID" autocomplete="off" /></label>
+        </div>
+        <div class="record-table-wrap">
+          <div class="record-table record-header" aria-hidden="true"><span>兑换物</span><span>用户 ID</span><span>消耗</span><span>兑换时间</span></div>
+          <div id="recordList" class="record-list" aria-live="polite"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="deleteDialog" class="confirm-dialog">
+    <form method="dialog">
+      <span class="dialog-icon"><i data-lucide="trash-2"></i></span>
+      <h2>删除兑换物</h2>
+      <p id="deleteMessage"></p>
+      <div class="dialog-actions"><button class="quiet-button" value="cancel">取消</button><button id="confirmDelete" class="danger-button" value="confirm">删除</button></div>
+    </form>
+  </dialog>
+  <div id="toastRegion" class="toast-region" aria-live="polite"></div>
+</body>
+</html>

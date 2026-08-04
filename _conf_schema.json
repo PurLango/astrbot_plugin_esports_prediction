@@ -23,6 +23,12 @@
     "hint": "例如填“群名简称”后，用户可直接发送“关键词+抽奖”或“抽奖+关键词”参与默认模式抽奖。",
     "default": "星缘"
   },
+  "lottery_trigger": {
+    "description": "无前缀抽奖完整触发词（兼容旧配置）",
+    "type": "string",
+    "hint": "兼容完整口令。若已配置抽奖触发关键词，则会同时支持“关键词+抽奖”和“抽奖+关键词”；这里填写完整词时也会直接匹配该短语。",
+    "default": "星缘抽奖"
+  },
   "sign_in_settings": {
     "description": "签到功能设置",
     "type": "object",
@@ -550,19 +556,19 @@
       "sign_in_success": {
         "description": "签到成功提示",
         "type": "string",
-        "default": "{user}签到成功，获得 {points} {name}{bonus_detail}。\n当前共有 {total} {name}，连续签到 {streak} 天，累计签到 {total_sign_in_days} 天。",
+        "default": "{user}来签到了，拿到 {points} {name}{bonus_detail}。\n现在攒到 {total} {name} 了，已连签 {streak} 天，累计签到 {total_sign_in_days} 天。",
         "hint": "支持变量：{user}, {points}, {name}, {total}, {streak}, {total_sign_in_days}, {bonus_detail}"
       },
       "already_signed_in": {
         "description": "重复签到提示",
         "type": "string",
-        "default": "{user}今天已经签到过啦。\n当前共有 {total} {name}，连续签到 {streak} 天，累计签到 {total_sign_in_days} 天。",
+        "default": "{user}今天已经签过到啦。\n现在有 {total} {name}，已连签 {streak} 天，累计签到 {total_sign_in_days} 天。",
         "hint": "支持变量：{user}, {total}, {name}, {streak}, {total_sign_in_days}"
       },
       "query_points": {
         "description": "积分查询提示",
         "type": "string",
-        "default": "{user}当前拥有 {total} {name}。\n连续签到 {streak} 天，累计签到 {total_sign_in_days} 天，今日状态：{sign_in_status}。",
+        "default": "{user}这边查到你现在有 {total} {name}。\n已连签 {streak} 天，累计签到 {total_sign_in_days} 天，今日状态是 {sign_in_status}。",
         "hint": "支持变量：{user}, {total}, {name}, {streak}, {total_sign_in_days}, {sign_in_status}"
       }
     }
@@ -591,9 +597,77 @@
       }
     }
   },
-  "exchange_settings": {
-    "description": "积分兑换功能设置",
+  "exchange_items": {
+    "description": "自定义兑换物（首次使用先配置这里）",
+    "type": "template_list",
+    "hint": "首次使用：新增一项，填写名称、所需积分和至少一份发放内容后保存。用户先发送 /兑换列表，再发送 /兑换 名称。名称、内容类型和是否仅限私聊都可以按需设置。",
+    "templates": {
+      "default": {
+        "name": "通用兑换物",
+        "items": {
+          "name": {
+            "description": "兑换物名称",
+            "type": "string",
+            "hint": "用户会在 /兑换列表 中看到该名称，并用 /兑换 名称 领取。建议使用简短、容易区分的名称，例如“群福利”“资料包”或“周边领取券”。",
+            "default": "群福利"
+          },
+          "enabled": {
+            "description": "启用该兑换物",
+            "type": "bool",
+            "hint": "开启后会显示在 /兑换列表 中；还在准备名称或库存时可以先关闭，配置不会丢失。",
+            "default": true
+          },
+          "cost": {
+            "description": "所需积分",
+            "type": "int",
+            "hint": "每成功兑换一次扣除的积分。首次测试时可设置为测试用户容易获得的数值，确认流程后再调整。",
+            "default": 100
+          },
+          "contents": {
+            "description": "发放内容（每项是一份库存）",
+            "type": "list",
+            "hint": "建议先添加一份测试内容。每个列表项是一份一次性库存，成功发放后不会再次发出；可填写兑换码、领取凭证、链接、口令或其他文本，同一内容不要在多个兑换物中重复。留空可保存，但库存为 0 时用户无法兑换。",
+            "default": []
+          },
+          "private_only": {
+            "description": "仅允许私聊兑换",
+            "type": "bool",
+            "hint": "开启后，用户需要在私聊中发送 /兑换 名称，适合不应公开的内容；内容可以公开时可关闭，让用户直接在群聊兑换。",
+            "default": true
+          },
+          "success_template": {
+            "description": "兑换成功提示",
+            "type": "string",
+            "hint": "可直接保留默认值。支持 {item}（名称）、{content}（本次内容）、{cost}（消耗）、{points_name}（积分名）、{remaining}（余额）；未写 {content} 时插件会自动追加发放内容。",
+            "default": "兑换成功！\n兑换物：{item}\n兑换内容：{content}\n消耗 {cost} {points_name}，剩余 {remaining} {points_name}。"
+          }
+        }
+      }
+    }
+  },
+  "exchange_scope": {
+    "description": "自定义兑换物适用范围",
     "type": "object",
+    "hint": "默认黑名单模式且范围留空，所有群和账号都可使用。可填写群号、QQ号，或使用 group:群号 / user:QQ号；切换为白名单后，只允许命中的群或账号兑换。",
+    "items": {
+      "mode": {
+        "description": "范围模式",
+        "type": "string",
+        "hint": "blacklist 表示排除列表中的群或账号，whitelist 表示只允许列表中的群或账号；未填写或填写其他值时按 blacklist 处理。",
+        "default": "blacklist"
+      },
+      "scope": {
+        "description": "群号或账号列表",
+        "type": "list",
+        "hint": "每行填写一个群号或 QQ 号，也可以加 group: / user: 前缀。黑名单留空表示不限制；白名单留空时不会向任何群开放，先添加范围再切换模式更稳妥。",
+        "default": []
+      }
+    }
+  },
+  "exchange_settings": {
+    "description": "群功能兑换设置（可选）",
+    "type": "object",
+    "hint": "这里控制群头衔、设精和禁言等平台功能，不影响上方的自定义兑换物。只使用自定义礼品兑换时，可按需关闭不使用的项目。",
     "items": {
       "title_enabled": {
         "description": "是否开启兑换头衔",
