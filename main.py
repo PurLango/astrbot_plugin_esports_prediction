@@ -1,17 +1,21 @@
 import asyncio
 import datetime
 import hashlib
+import inspect
 import json
 import os
 import random
 import re
 import shutil
+import uuid
 from typing import Any, Dict
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import At, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools, register
+from astrbot.core.platform.message_session import MessageSession
+from astrbot.core.platform.message_type import MessageType
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
@@ -24,9 +28,12 @@ except ImportError:
     from lottery_feature import LotteryFeatureMixin
 
 PLUGIN_NAME = "astrbot_plugin_point_system"
-DATA_VERSION = 8
+DATA_VERSION = 9
 DEFAULT_POINTS_NAME = "积分"
 GLOBAL_SIGN_IN_SCOPE_ID = "__global_sign_in__"
+PRIVATE_SEND_SUCCESS = "success"
+PRIVATE_SEND_FAILED = "failed"
+PRIVATE_SEND_UNCERTAIN = "uncertain"
 DEFAULT_NEGATIVE_DEBT_MESSAGE = "你已背负债务，请穿上女仆装打工。"
 MAX_SPECIAL_REWARD_REGEX_LENGTH = 64
 MAX_SPECIAL_REWARD_MESSAGE_LENGTH = 200
@@ -79,7 +86,7 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "astrbot_plugin_point_system 是一个面向 AstrBot 群聊场景的积分互动插件，围绕“签到、活跃、抽奖、兑换、管理”这几类高频玩法设计。它支持按群维护成员信息、自动保存数据、定时备份、日期口令奖励，以及负分限制和群头衔联动，适合做群活跃体系或轻量积分经济。",
-    "2.0.0",
+    "2.0.1",
     "https://github.com/menglimi/astrbot_plugin_point_system",
 )
 class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
@@ -131,6 +138,8 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             "users": {},
             "groups": {},
             "exchange_redemptions": [],
+            "private_message_targets": {},
+            "reset_generation": 0,
         }
 
     def _normalize_int(self, value: Any, default: int, minimum: int = 0) -> int:
@@ -321,6 +330,301 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
     def _exchange_content_fingerprint(self, content: str) -> str:
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _private_send_result_status(result: Any, route: str) -> str:
+        if route == "recorded_private_session":
+            if result is True:
+                return PRIVATE_SEND_SUCCESS
+            if result is False:
+                return PRIVATE_SEND_FAILED
+            return PRIVATE_SEND_UNCERTAIN
+
+        if not isinstance(result, dict):
+            return PRIVATE_SEND_UNCERTAIN
+        status = str(result.get("status", "")).strip().casefold()
+        if status and status not in {"ok", "success"}:
+            return PRIVATE_SEND_FAILED
+        retcode = result.get("retcode")
+        if retcode is not None:
+            try:
+                return (
+                    PRIVATE_SEND_SUCCESS
+                    if int(retcode) == 0
+                    else PRIVATE_SEND_FAILED
+                )
+            except (TypeError, ValueError):
+                return PRIVATE_SEND_FAILED
+        if status in {"ok", "success"} or result.get("message_id") is not None:
+            return PRIVATE_SEND_SUCCESS
+        return PRIVATE_SEND_UNCERTAIN
+
+    @staticmethod
+    def _event_is_private_chat(event: AstrMessageEvent) -> bool:
+        private_check = getattr(event, "is_private_chat", None)
+        if callable(private_check):
+            try:
+                return bool(private_check())
+            except Exception:
+                pass
+
+        session = getattr(event, "session", None)
+        if getattr(session, "message_type", None) == MessageType.FRIEND_MESSAGE:
+            return True
+        message_type_getter = getattr(event, "get_message_type", None)
+        if callable(message_type_getter):
+            try:
+                return message_type_getter() == MessageType.FRIEND_MESSAGE
+            except Exception:
+                pass
+        return False
+
+    def _event_platform_id(self, event: AstrMessageEvent) -> str:
+        session = getattr(event, "session", None)
+        return self._normalize_text(
+            getattr(session, "platform_id", "")
+            or getattr(session, "platform_name", "")
+            or getattr(getattr(event, "platform_meta", None), "id", "")
+        ).strip()
+
+    def _private_message_target_key(
+        self, event: AstrMessageEvent, user_id: str
+    ) -> str:
+        platform_id = self._event_platform_id(event)
+        normalized_user_id = self._normalize_user_id(user_id)
+        if not platform_id or not normalized_user_id:
+            return ""
+        return f"{platform_id}|{normalized_user_id}"
+
+    def _normalize_private_message_targets(self, raw: Any) -> Dict[str, str]:
+        if not isinstance(raw, dict):
+            return {}
+
+        targets: Dict[str, str] = {}
+        for raw_key, raw_target in raw.items():
+            key = self._normalize_text(raw_key).strip()[:300]
+            target = self._normalize_text(raw_target).strip()[:600]
+            if not key or not target:
+                continue
+            try:
+                session = MessageSession.from_str(target)
+            except (TypeError, ValueError):
+                continue
+            if session.message_type == MessageType.FRIEND_MESSAGE:
+                targets[key] = str(session)
+        return targets
+
+    def _remember_private_message_target_locked(
+        self, event: AstrMessageEvent, user_id: str
+    ) -> bool:
+        if not self._event_is_private_chat(event):
+            return False
+
+        key = self._private_message_target_key(event, user_id)
+        raw_session = getattr(event, "session", None)
+        target = self._normalize_text(
+            str(raw_session) if raw_session is not None else ""
+        ).strip()
+        if not target:
+            target = self._normalize_text(
+                getattr(event, "unified_msg_origin", "")
+            ).strip()
+        if not key or not target:
+            return False
+        try:
+            session = MessageSession.from_str(target)
+        except (TypeError, ValueError):
+            return False
+        if session.message_type != MessageType.FRIEND_MESSAGE:
+            return False
+
+        targets = self.data.setdefault("private_message_targets", {})
+        normalized_target = str(session)
+        if targets.get(key) == normalized_target:
+            return False
+        targets[key] = normalized_target
+        return True
+
+    def _get_recorded_private_message_target(
+        self, event: AstrMessageEvent, user_id: str
+    ) -> MessageSession | None:
+        key = self._private_message_target_key(event, user_id)
+        raw_target = self.data.get("private_message_targets", {}).get(key)
+        if not key or not raw_target:
+            return None
+        try:
+            session = MessageSession.from_str(str(raw_target))
+        except (TypeError, ValueError):
+            return None
+        if (
+            session.message_type != MessageType.FRIEND_MESSAGE
+            or session.platform_id != self._event_platform_id(event)
+        ):
+            return None
+        return session
+
+    async def _send_private_text(
+        self, event: AstrMessageEvent, user_id: str, message: str
+    ) -> str:
+        """选择单一可信路由发送私聊，避免失败回退造成重复发放。"""
+        normalized_user_id = self._normalize_user_id(user_id)
+        if not normalized_user_id:
+            return PRIVATE_SEND_FAILED
+
+        target_user_id: int | str = (
+            int(normalized_user_id)
+            if normalized_user_id.isdigit()
+            else normalized_user_id
+        )
+        route = ""
+        sender = None
+        sender_args: tuple[Any, ...] = ()
+        sender_kwargs: Dict[str, Any] = {}
+        bot = getattr(event, "bot", None)
+
+        platform_meta_name = self._normalize_text(
+            getattr(getattr(event, "platform_meta", None), "name", "")
+        ).strip().casefold()
+        is_aiocqhttp_event = isinstance(event, AiocqhttpMessageEvent) or (
+            platform_meta_name == "aiocqhttp"
+        )
+        if is_aiocqhttp_event and bot is not None:
+            action_sender = getattr(getattr(bot, "api", None), "call_action", None)
+            direct_sender = getattr(bot, "send_private_msg", None)
+            if callable(action_sender):
+                route = "onebot_call_action"
+                sender = action_sender
+                sender_args = ("send_private_msg",)
+                sender_kwargs = {"user_id": target_user_id, "message": message}
+            elif callable(direct_sender):
+                route = "onebot_send_private_msg"
+                sender = direct_sender
+                sender_kwargs = {"user_id": target_user_id, "message": message}
+
+        if sender is None:
+            private_session = self._get_recorded_private_message_target(
+                event, normalized_user_id
+            )
+            context_sender = getattr(self.context, "send_message", None)
+            if private_session is not None and callable(context_sender):
+                route = "recorded_private_session"
+                sender = context_sender
+                sender_args = (private_session, MessageChain([Plain(message)]))
+
+        if sender is None:
+            logger.warning(
+                f"[PointSystem] 无可用私聊发送路由: user={normalized_user_id}, "
+                f"platform={self._event_platform_id(event) or 'unknown'}"
+            )
+            return PRIVATE_SEND_FAILED
+
+        try:
+            result = sender(*sender_args, **sender_kwargs)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as exc:
+            logger.warning(
+                f"[PointSystem] 兑换私聊发送状态不确定: user={normalized_user_id}, "
+                f"route={route}, error_type={type(exc).__name__}"
+            )
+            return PRIVATE_SEND_UNCERTAIN
+
+        status = self._private_send_result_status(result, route)
+        if status == PRIVATE_SEND_FAILED:
+            logger.warning(
+                f"[PointSystem] 兑换私聊发送被平台明确拒绝: "
+                f"user={normalized_user_id}, route={route}"
+            )
+        return status
+
+    async def _mark_exchange_delivery_status(
+        self, redemption: Dict[str, Any], status: str
+    ) -> bool:
+        async with self._data_lock:
+            redemptions = self.data.setdefault("exchange_redemptions", [])
+            redemption_id = self._normalize_text(
+                redemption.get("redemption_id")
+            ).strip()
+            current = next(
+                (
+                    item
+                    for item in redemptions
+                    if isinstance(item, dict)
+                    and item.get("redemption_id") == redemption_id
+                ),
+                None,
+            )
+            if current is None:
+                return False
+            current["delivery_status"] = (
+                "delivered" if status == PRIVATE_SEND_SUCCESS else "uncertain"
+            )
+            if status == PRIVATE_SEND_SUCCESS:
+                current["delivered_at"] = datetime.datetime.now().isoformat(
+                    timespec="seconds"
+                )
+            return await self._save_data_locked()
+
+    async def _rollback_failed_private_exchange(
+        self,
+        sender_id: str,
+        cost: int,
+        redemption: Dict[str, Any],
+    ) -> bool:
+        """私聊失败时退还积分并释放库存，保存失败则恢复原兑换状态。"""
+        async with self._data_lock:
+            redemptions = self.data.setdefault("exchange_redemptions", [])
+            redemption_id = self._normalize_text(
+                redemption.get("redemption_id")
+            ).strip()
+            redemption_index = next(
+                (
+                    index
+                    for index, current in enumerate(redemptions)
+                    if isinstance(current, dict)
+                    and current.get("redemption_id") == redemption_id
+                ),
+                None,
+            )
+            if redemption_index is None:
+                logger.error(
+                    f"[PointSystem] 私聊失败后未找到待回滚兑换记录: user={sender_id}"
+                )
+                return False
+
+            current_redemption = redemptions[redemption_index]
+            current_generation = self._normalize_int(
+                self.data.get("reset_generation"), 0, minimum=0
+            )
+            redemption_generation = self._normalize_int(
+                current_redemption.get("reset_generation"), 0, minimum=0
+            )
+            if redemption_generation != current_generation:
+                current_redemption["delivery_status"] = "uncertain"
+                await self._save_data_locked()
+                logger.warning(
+                    f"[PointSystem] 数据重置后跳过旧兑换退款: redemption={redemption_id}"
+                )
+                return False
+
+            users = self.data.setdefault("users", {})
+            if sender_id not in users:
+                current_redemption["delivery_status"] = "uncertain"
+                await self._save_data_locked()
+                return False
+
+            removed_redemption = redemptions.pop(redemption_index)
+            user_info = users[sender_id]
+            user_info["points"] += cost
+            if await self._save_data_locked():
+                return True
+
+            user_info["points"] -= cost
+            redemptions.insert(redemption_index, removed_redemption)
+            logger.error(
+                f"[PointSystem] 私聊失败后的兑换回滚保存失败: user={sender_id}"
+            )
+            return False
+
     def _normalize_exchange_redemptions(self, raw: Any) -> list[Dict[str, Any]]:
         if not isinstance(raw, list):
             return []
@@ -339,11 +643,38 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             seen_hashes.add(content_hash)
             redemptions.append(
                 {
+                    "redemption_id": self._normalize_text(
+                        item.get("redemption_id")
+                    ).strip()
+                    or hashlib.sha256(
+                        (
+                            f"{content_hash}|{item.get('user_id', '')}|"
+                            f"{item.get('redeemed_at', '')}"
+                        ).encode("utf-8")
+                    ).hexdigest()[:32],
                     "content_hash": content_hash,
                     "item_name": self._normalize_text(item.get("item_name")).strip(),
                     "user_id": self._normalize_user_id(item.get("user_id", "")),
                     "redeemed_at": self._normalize_text(item.get("redeemed_at")),
                     "cost": self._normalize_int(item.get("cost"), 0, minimum=0),
+                    "delivery_status": (
+                        "uncertain"
+                        if self._normalize_text(item.get("delivery_status"))
+                        .strip()
+                        .casefold()
+                        in {"pending", "uncertain"}
+                        else "delivered"
+                    ),
+                    "delivery_channel": self._normalize_text(
+                        item.get("delivery_channel", "legacy")
+                    ).strip()[:32]
+                    or "legacy",
+                    "delivered_at": self._normalize_text(
+                        item.get("delivered_at")
+                    ).strip(),
+                    "reset_generation": self._normalize_int(
+                        item.get("reset_generation"), 0, minimum=0
+                    ),
                 }
             )
         return redemptions
@@ -592,6 +923,12 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             store["groups"] = groups
             store["exchange_redemptions"] = self._normalize_exchange_redemptions(
                 raw.get("exchange_redemptions", [])
+            )
+            store["private_message_targets"] = self._normalize_private_message_targets(
+                raw.get("private_message_targets", {})
+            )
+            store["reset_generation"] = self._normalize_int(
+                raw.get("reset_generation"), 0, minimum=0
             )
             return store, migrated
 
@@ -1145,7 +1482,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         }
         group_id = self._get_group_id(event)
         group_ids = [group_id] if group_id else []
-        # 私聊事件没有群号时，沿用已记录的群关系，方便白名单群用户私聊领取。
+        # 私聊事件没有群号时，沿用已记录的群关系，兼容用户直接在私聊中兑换。
         if not group_id and current_user_id:
             group_ids.extend(self._collect_user_group_ids(current_user_id))
         for current_group_id in group_ids:
@@ -1172,6 +1509,31 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         if len(matches) == 1:
             return matches[0], False
         return None, len(matches) > 1
+
+    @staticmethod
+    def _format_exchange_success_message(
+        template: str,
+        item_name: str,
+        content: str,
+        cost: int,
+        points_name: str,
+        remaining: int,
+    ) -> str:
+        message = template
+        if "{content}" not in message:
+            message += "\n兑换内容：{content}"
+        replacements = {
+            "{item}": item_name,
+            "{content}": content,
+            "{cost}": str(cost),
+            "{points_name}": points_name,
+            "{remaining}": str(remaining),
+        }
+        return re.sub(
+            r"\{(?:item|content|cost|points_name|remaining)\}",
+            lambda match: replacements[match.group(0)],
+            message,
+        )
 
     def _get_negative_settings(self) -> Dict[str, Any]:
         negative_cfg = self.config.get("negative_settings", {})
@@ -2328,6 +2690,14 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         )
         yield self._plain_result(event, "；".join(lines))
 
+    @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE, priority=100000)
+    async def on_private_message_remember_target(self, event: AstrMessageEvent):
+        """记录适配器提供的真实私聊会话，供群内兑换安全发放。"""
+        sender_id = str(event.get_sender_id())
+        async with self._data_lock:
+            if self._remember_private_message_target_locked(event, sender_id):
+                await self._save_data_locked()
+
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=100000)
     async def on_group_message_gain_points(self, event: AstrMessageEvent):
         """处理无前缀签到、无前缀抽奖、日期口令奖励与群聊活跃奖励。"""
@@ -2579,7 +2949,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
                 if stock:
                     available_count += 1
                 stock_text = f"库存 {stock}" if stock else "暂时缺货"
-                private_hint = " · 私聊领取" if item["private_only"] else ""
+                private_hint = " · 结果私聊" if item["private_only"] else ""
                 lines.append(
                     f"{index}. {item['name']}：{item['cost']} {points_name} · "
                     f"{stock_text}{private_hint}"
@@ -2650,24 +3020,18 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             yield self._plain_result(event, message)
             return
 
-        if item["private_only"] and self._get_group_id(event):
-            async with self._data_lock:
-                group_member_changed = self._touch_group_member(
-                    event, sender_id, self._get_sender_display_name(event)
-                )
-                if group_member_changed:
-                    await self._save_data_locked()
-            yield event.plain_result(
-                f"【{item['name']}】会通过私聊发放，本次尚未扣除积分。\n"
-                f"请打开与机器人的私聊并发送：/兑换 {item['name']}"
-            )
-            return
-
+        is_private_event = self._event_is_private_chat(event)
+        should_private_deliver = bool(item["private_only"] and not is_private_event)
         delivered_content = ""
         remaining_points = 0
         result_error = ""
+        redemption_record: Dict[str, Any] | None = None
 
         async with self._data_lock:
+            self._touch_group_member(
+                event, sender_id, self._get_sender_display_name(event)
+            )
+            self._remember_private_message_target_locked(event, sender_id)
             user_info = self._get_user_record(sender_id)
             redemptions = self.data.setdefault("exchange_redemptions", [])
             redeemed_hashes = {
@@ -2696,44 +3060,102 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             else:
                 user_info["points"] -= item["cost"]
                 remaining_points = user_info["points"]
+                now = datetime.datetime.now().isoformat(timespec="seconds")
                 redemption = {
+                    "redemption_id": uuid.uuid4().hex,
                     "content_hash": self._exchange_content_fingerprint(
                         delivered_content
                     ),
                     "item_name": item["name"],
                     "user_id": sender_id,
-                    "redeemed_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                    "redeemed_at": now,
                     "cost": item["cost"],
+                    "delivery_status": (
+                        "pending" if should_private_deliver else "delivered"
+                    ),
+                    "delivery_channel": (
+                        "private" if item["private_only"] else "current"
+                    ),
+                    "delivered_at": "" if should_private_deliver else now,
+                    "reset_generation": self._normalize_int(
+                        self.data.get("reset_generation"), 0, minimum=0
+                    ),
                 }
                 redemptions.append(redemption)
+                redemption_record = redemption
                 if not await self._save_data_locked():
                     redemptions.pop()
                     user_info["points"] += item["cost"]
                     delivered_content = ""
+                    redemption_record = None
                     result_error = "兑换记录保存失败，本次未扣除积分，请稍后再试。"
 
         if result_error:
             yield self._plain_result(event, result_error)
             return
 
-        template = item["success_template"]
-        if "{content}" not in template:
-            template += "\n兑换内容：{content}"
-        try:
-            message = template.format(
-                item=item["name"],
-                content=delivered_content,
-                cost=item["cost"],
-                points_name=points_name,
-                remaining=remaining_points,
+        message = self._format_exchange_success_message(
+            item["success_template"],
+            item["name"],
+            delivered_content,
+            item["cost"],
+            points_name,
+            remaining_points,
+        )
+        if should_private_deliver:
+            private_send_status = await self._send_private_text(
+                event, sender_id, message
             )
-        except (KeyError, ValueError):
-            message = (
-                f"兑换成功！\n兑换物：{item['name']}\n"
-                f"兑换内容：{delivered_content}\n"
-                f"消耗 {item['cost']} {points_name}，"
-                f"剩余 {remaining_points} {points_name}。"
+            if private_send_status == PRIVATE_SEND_FAILED:
+                rolled_back = bool(
+                    redemption_record
+                    and await self._rollback_failed_private_exchange(
+                        sender_id, item["cost"], redemption_record
+                    )
+                )
+                if rolled_back:
+                    yield self._plain_result(
+                        event,
+                        f"未能通过私聊发送【{item['name']}】，本次未扣除积分，"
+                        "也未消耗库存。请先向机器人发送一条私聊消息建立会话，"
+                        "再回群重新兑换。",
+                    )
+                else:
+                    yield self._plain_result(
+                        event,
+                        f"【{item['name']}】私聊发送失败，且兑换状态未能自动回滚。"
+                        "请暂勿重复操作并联系管理员核对。",
+                    )
+                return
+
+            if private_send_status == PRIVATE_SEND_UNCERTAIN:
+                if redemption_record:
+                    await self._mark_exchange_delivery_status(
+                        redemption_record, PRIVATE_SEND_UNCERTAIN
+                    )
+                yield self._plain_result(
+                    event,
+                    f"【{item['name']}】的私聊发送状态暂时无法确认。"
+                    "为避免同一份奖励重复发放，本次积分和库存已保留；"
+                    "请先检查私聊，若未收到请联系管理员核对，暂勿重复兑换。",
+                )
+                return
+
+            if redemption_record and not await self._mark_exchange_delivery_status(
+                redemption_record, PRIVATE_SEND_SUCCESS
+            ):
+                logger.warning(
+                    f"[PointSystem] 兑换已私聊送达但状态保存失败: "
+                    f"redemption={redemption_record.get('redemption_id', '')}"
+                )
+            yield self._plain_result(
+                event,
+                f"兑换成功！【{item['name']}】的兑换结果已通过私聊发送。"
+                f"已消耗 {item['cost']} {points_name}，"
+                f"剩余 {remaining_points} {points_name}。",
             )
+            return
+
         yield event.plain_result(message)
 
     @filter.command("兑换设精")
@@ -2871,7 +3293,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         if self._normalize_text(self._get_command_args(event)) != "确认":
             yield self._plain_result(
                 event,
-                "该操作会清空所有积分、抽奖、生日和群记录（已发放兑换物记录会保留），"
+                "该操作会清空所有积分、抽奖、生日和群记录（兑换记录会保留），"
                 "请发送 /清空所有数据 确认 继续。",
             )
             return
@@ -2883,8 +3305,12 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             old_user_count = len(self.data.get("users", {}))
             old_group_count = len(self.data.get("groups", {}))
             exchange_redemptions = self.data.get("exchange_redemptions", [])
+            next_reset_generation = self._normalize_int(
+                self.data.get("reset_generation"), 0, minimum=0
+            ) + 1
             self.data = self._new_store()
             self.data["exchange_redemptions"] = exchange_redemptions
+            self.data["reset_generation"] = next_reset_generation
             await self._save_data_locked()
 
         if log_operations:

@@ -600,7 +600,7 @@
   "exchange_items": {
     "description": "自定义兑换物（首次使用先配置这里）",
     "type": "template_list",
-    "hint": "首次使用：新增一项，填写名称、所需积分和至少一份发放内容后保存。用户先发送 /兑换列表，再发送 /兑换 名称。名称、内容类型和是否仅限私聊都可以按需设置。",
+    "hint": "首次使用：新增一项，填写名称、所需积分和至少一份发放内容后保存。用户先发送 /兑换列表，再在群里发送 /兑换 名称；需要保密时，Bot 会把结果私聊给用户。名称、内容类型和发放渠道都可以按需设置。",
     "templates": {
       "default": {
         "name": "通用兑换物",
@@ -630,15 +630,15 @@
             "default": []
           },
           "private_only": {
-            "description": "仅允许私聊兑换",
+            "description": "通过私聊发放结果",
             "type": "bool",
-            "hint": "开启后，用户需要在私聊中发送 /兑换 名称，适合不应公开的内容；内容可以公开时可关闭，让用户直接在群聊兑换。",
+            "hint": "开启后，用户仍在群聊发送 /兑换 名称，Bot 会把兑换内容主动私聊给用户，群里只显示成功提示；内容可以公开时可关闭。",
             "default": true
           },
           "success_template": {
             "description": "兑换成功提示",
             "type": "string",
-            "hint": "可直接保留默认值。支持 {item}（名称）、{content}（本次内容）、{cost}（消耗）、{points_name}（积分名）、{remaining}（余额）；未写 {content} 时插件会自动追加发放内容。",
+            "hint": "可直接保留默认值。支持 {item}（名称）、{content}（本次内容）、{cost}（消耗）、{points_name}（积分名）、{remaining}（余额）；未写 {content} 时插件会自动追加，未识别的占位符会原样显示。",
             "default": "兑换成功！\n兑换物：{item}\n兑换内容：{content}\n消耗 {cost} {points_name}，剩余 {remaining} {points_name}。"
           }
         }

@@ -149,11 +149,17 @@ class PointSystemPageApi:
     def _redemption_view(self, value: Any) -> dict[str, Any] | None:
         if not isinstance(value, dict):
             return None
+        raw_status = self._text(value.get("delivery_status"), 32).casefold()
         return {
             "item_name": self._text(value.get("item_name"), 120),
             "user_id": self._text(value.get("user_id"), 120),
             "redeemed_at": self._text(value.get("redeemed_at"), 64),
             "cost": self._int(value.get("cost"), 0, 0, 1_000_000_000),
+            "delivery_status": (
+                "uncertain"
+                if raw_status in {"pending", "uncertain"}
+                else "delivered"
+            ),
         }
 
     def _overview_locked(self) -> dict[str, Any]:

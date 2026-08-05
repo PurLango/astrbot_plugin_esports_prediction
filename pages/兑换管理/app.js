@@ -163,7 +163,7 @@
       const stock = stockFor(item);
       return `<button class="item-row ${index === state.selected ? "active" : ""} ${item.enabled ? "" : "disabled"}" type="button" data-index="${index}">
         <strong>${escapeHtml(item.name || "未命名兑换物")}</strong><span class="stock-pill ${stock ? "" : "empty"}">${stock}</span>
-        <small>${escapeHtml(item.cost)} ${escapeHtml(state.data?.points_name || "积分")}${item.private_only ? " · 私聊" : ""}</small>
+        <small>${escapeHtml(item.cost)} ${escapeHtml(state.data?.points_name || "积分")}${item.private_only ? " · 结果私聊" : ""}</small>
       </button>`;
     }).join("");
   }
@@ -247,7 +247,6 @@
     if (example) {
       item.name = state.draft.some((entry) => entry.name === "新人礼包示例") ? nextItemName() : "新人礼包示例";
       item.enabled = false;
-      item.private_only = false;
       item.contents = ["奖励内容 001", "奖励内容 002", "奖励内容 003"];
     }
     state.draft.push(item);
@@ -322,7 +321,7 @@
       return;
     }
     list.innerHTML = records.map((item) => `<div class="record-table record-row">
-      <strong>${escapeHtml(item.item_name || "已删除兑换物")}</strong>
+      <div class="record-item"><strong>${escapeHtml(item.item_name || "已删除兑换物")}</strong><small class="record-status ${item.delivery_status === "uncertain" ? "uncertain" : ""}">${item.delivery_status === "uncertain" ? "待核对" : "已发放"}</small></div>
       <span>${escapeHtml(item.user_id || "未知")}</span>
       <span class="record-cost">-${escapeHtml(item.cost)} ${escapeHtml(state.data?.points_name || "积分")}</span>
       <span>${escapeHtml(formatDate(item.redeemed_at))}</span>
