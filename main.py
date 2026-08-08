@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import hashlib
+import hmac
 import inspect
 import json
 import os
@@ -28,7 +29,10 @@ except ImportError:
     from lottery_feature import LotteryFeatureMixin
 
 PLUGIN_NAME = "astrbot_plugin_point_system"
-DATA_VERSION = 9
+DATA_VERSION = 11
+POINT_SNAPSHOT_BUCKET_MINUTES = 15
+POINT_SNAPSHOT_RETENTION_DAYS = 90
+POINT_SNAPSHOT_MAX_RECORDS = 10000
 DEFAULT_POINTS_NAME = "积分"
 GLOBAL_SIGN_IN_SCOPE_ID = "__global_sign_in__"
 PRIVATE_SEND_SUCCESS = "success"
@@ -75,6 +79,11 @@ REGISTERED_COMMAND_NAMES = (
     "积分榜",
     "给积分",
     "扣积分",
+    "积分红包",
+    "发红包",
+    "抢红包",
+    "领红包",
+    "红包",
     "抽奖",
 )
 REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
@@ -86,7 +95,7 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "astrbot_plugin_point_system 是一个面向 AstrBot 群聊场景的积分互动插件，围绕“签到、活跃、抽奖、兑换、管理”这几类高频玩法设计。它支持按群维护成员信息、自动保存数据、定时备份、日期口令奖励，以及负分限制和群头衔联动，适合做群活跃体系或轻量积分经济。",
-    "2.0.1",
+    "2.3.0",
     "https://github.com/menglimi/astrbot_plugin_point_system",
 )
 class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
@@ -105,7 +114,8 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         os.makedirs(self.data_dir, exist_ok=True)
 
         self.data, migrated = self._load_data_sync()
-        if migrated:
+        snapshot_created = self._record_point_snapshot()
+        if migrated or snapshot_created:
             self._write_data_sync()
         self._register_page_api()
 
@@ -139,6 +149,8 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             "groups": {},
             "exchange_redemptions": [],
             "private_message_targets": {},
+            "red_packets": [],
+            "point_snapshots": [],
             "reset_generation": 0,
         }
 
@@ -655,6 +667,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
                     "content_hash": content_hash,
                     "item_name": self._normalize_text(item.get("item_name")).strip(),
                     "user_id": self._normalize_user_id(item.get("user_id", "")),
+                    "group_id": self._normalize_user_id(item.get("group_id", "")),
                     "redeemed_at": self._normalize_text(item.get("redeemed_at")),
                     "cost": self._normalize_int(item.get("cost"), 0, minimum=0),
                     "delivery_status": (
@@ -678,6 +691,120 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
                 }
             )
         return redemptions
+
+    def _normalize_red_packets(self, raw: Any) -> list[Dict[str, Any]]:
+        if not isinstance(raw, list):
+            return []
+
+        packets: list[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+
+            packet_id = self._normalize_text(item.get("packet_id")).strip().casefold()
+            packet_type = self._normalize_text(item.get("packet_type")).strip().casefold()
+            if (
+                not re.fullmatch(r"[a-z0-9]{6,32}", packet_id)
+                or packet_id in seen_ids
+                or packet_type not in {"fixed", "lucky", "password"}
+            ):
+                continue
+
+            total_points = self._normalize_int(
+                item.get("total_points"), 0, minimum=1
+            )
+            total_count = self._normalize_int(item.get("total_count"), 0, minimum=1)
+            if total_points <= 0 or total_count <= 0:
+                continue
+
+            claimed_user_ids: list[str] = []
+            seen_users: set[str] = set()
+            raw_claimed_users = item.get("claimed_user_ids", [])
+            if isinstance(raw_claimed_users, list):
+                for raw_user_id in raw_claimed_users:
+                    user_id = self._normalize_user_id(raw_user_id)
+                    if user_id and user_id not in seen_users:
+                        seen_users.add(user_id)
+                        claimed_user_ids.append(user_id)
+                    if len(claimed_user_ids) >= total_count:
+                        break
+
+            claimed_records: list[Dict[str, Any]] = []
+            raw_claimed_records = item.get("claimed_records", [])
+            if isinstance(raw_claimed_records, list):
+                for raw_record in raw_claimed_records:
+                    if not isinstance(raw_record, dict):
+                        continue
+                    record_user_id = self._normalize_user_id(raw_record.get("user_id"))
+                    record_amount = self._normalize_int(
+                        raw_record.get("amount"), 0, minimum=1
+                    )
+                    if not record_user_id or record_amount <= 0:
+                        continue
+                    claimed_records.append(
+                        {
+                            "user_id": record_user_id,
+                            "display_name": self._normalize_text(
+                                raw_record.get("display_name")
+                            ).strip(),
+                            "amount": record_amount,
+                        }
+                    )
+                    if len(claimed_records) >= total_count:
+                        break
+
+            remaining_count = min(
+                max(
+                    self._normalize_int(
+                        item.get("remaining_count"),
+                        total_count - len(claimed_user_ids),
+                        minimum=0,
+                    ),
+                    total_count,
+                ),
+                total_count - len(claimed_user_ids),
+            )
+            remaining_points = min(
+                max(
+                    self._normalize_int(
+                        item.get("remaining_points"), total_points, minimum=0
+                    ),
+                    0,
+                ),
+                total_points,
+            )
+            password_hash = self._normalize_text(item.get("password_hash")).strip().lower()
+            if packet_type == "password" and not re.fullmatch(r"[0-9a-f]{64}", password_hash):
+                continue
+
+            seen_ids.add(packet_id)
+            packets.append(
+                {
+                    "packet_id": packet_id,
+                    "packet_type": packet_type,
+                    "total_points": total_points,
+                    "remaining_points": remaining_points,
+                    "total_count": total_count,
+                    "remaining_count": remaining_count,
+                    "unit_points": self._normalize_int(
+                        item.get("unit_points"),
+                        total_points // total_count,
+                        minimum=1,
+                    ),
+                    "claimed_user_ids": claimed_user_ids,
+                    "claimed_records": claimed_records,
+                    "group_id": self._normalize_user_id(item.get("group_id", "")),
+                    "sender_id": self._normalize_user_id(item.get("sender_id", "")),
+                    "password_hash": password_hash if packet_type == "password" else "",
+                    "created_at": self._normalize_text(item.get("created_at")),
+                    "expires_at": self._normalize_text(item.get("expires_at")),
+                    "reset_generation": self._normalize_int(
+                        item.get("reset_generation"), 0, minimum=0
+                    ),
+                }
+            )
+        return packets
 
     def _normalize_backup_paths(self, value: Any) -> list[str]:
         paths = self._normalize_string_list(value)
@@ -885,6 +1012,123 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             }
         return groups
 
+    def _normalize_point_snapshots(
+        self, raw: Any, now: datetime.datetime | None = None
+    ) -> list[Dict[str, Any]]:
+        if not isinstance(raw, list):
+            return []
+
+        current = now or datetime.datetime.now()
+        cutoff = current - datetime.timedelta(days=POINT_SNAPSHOT_RETENTION_DAYS)
+        by_bucket: Dict[datetime.datetime, Dict[str, Any]] = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            captured_text = self._normalize_text(item.get("captured_at")).strip()
+            try:
+                captured_at = datetime.datetime.fromisoformat(captured_text)
+            except (TypeError, ValueError):
+                continue
+            if captured_at.tzinfo is not None:
+                captured_at = captured_at.astimezone().replace(tzinfo=None)
+            if captured_at < cutoff or captured_at > current + datetime.timedelta(days=1):
+                continue
+
+            raw_groups = item.get("groups", {})
+            snapshot_groups: Dict[str, Any] = {}
+            if isinstance(raw_groups, dict):
+                for raw_group_id, raw_group in raw_groups.items():
+                    group_id = self._normalize_user_id(raw_group_id)
+                    if not group_id or not isinstance(raw_group, dict):
+                        continue
+                    snapshot_groups[group_id] = {
+                        "total_points": self._normalize_signed_int(
+                            raw_group.get("total_points"), 0
+                        ),
+                        "user_count": self._normalize_int(
+                            raw_group.get("user_count"), 0, minimum=0
+                        ),
+                    }
+
+            normalized = {
+                "captured_at": captured_at.isoformat(timespec="seconds"),
+                "total_points": self._normalize_signed_int(
+                    item.get("total_points"), 0
+                ),
+                "user_count": self._normalize_int(
+                    item.get("user_count"), 0, minimum=0
+                ),
+                "groups": snapshot_groups,
+            }
+            bucket = captured_at.replace(
+                minute=(captured_at.minute // POINT_SNAPSHOT_BUCKET_MINUTES)
+                * POINT_SNAPSHOT_BUCKET_MINUTES,
+                second=0,
+                microsecond=0,
+            )
+            previous = by_bucket.get(bucket)
+            if previous is None or normalized["captured_at"] >= previous["captured_at"]:
+                by_bucket[bucket] = normalized
+
+        snapshots = [by_bucket[key] for key in sorted(by_bucket)]
+        return snapshots[-POINT_SNAPSHOT_MAX_RECORDS:]
+
+    def _record_point_snapshot(
+        self, now: datetime.datetime | None = None
+    ) -> bool:
+        captured_at = (now or datetime.datetime.now()).replace(microsecond=0)
+        users = self.data.get("users", {})
+        groups = self.data.get("groups", {})
+        if not isinstance(users, dict):
+            users = {}
+        if not isinstance(groups, dict):
+            groups = {}
+
+        normalized_users = {
+            str(user_id): record
+            for user_id, record in users.items()
+            if isinstance(record, dict)
+        }
+        balances = {
+            user_id: self._normalize_signed_int(record.get("points"), 0)
+            for user_id, record in normalized_users.items()
+        }
+        snapshot_groups: Dict[str, Any] = {}
+        for raw_group_id, raw_group in groups.items():
+            group_id = self._normalize_user_id(raw_group_id)
+            if not group_id or not isinstance(raw_group, dict):
+                continue
+            members = raw_group.get("members", {})
+            member_ids = (
+                {str(user_id) for user_id in members}
+                if isinstance(members, dict)
+                else set()
+            )
+            member_balances = [
+                balances[user_id]
+                for user_id in member_ids
+                if user_id in balances
+            ]
+            snapshot_groups[group_id] = {
+                "total_points": sum(member_balances),
+                "user_count": len(member_balances),
+            }
+
+        snapshot = {
+            "captured_at": captured_at.isoformat(timespec="seconds"),
+            "total_points": sum(balances.values()),
+            "user_count": len(normalized_users),
+            "groups": snapshot_groups,
+        }
+        previous = self.data.get("point_snapshots", [])
+        normalized = self._normalize_point_snapshots(
+            [*(previous if isinstance(previous, list) else []), snapshot],
+            now=captured_at,
+        )
+        changed = normalized != previous
+        self.data["point_snapshots"] = normalized
+        return changed
+
     def _normalize_store(self, raw: Any) -> tuple[Dict[str, Any], bool]:
         store = self._new_store()
         migrated = False
@@ -926,6 +1170,12 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             )
             store["private_message_targets"] = self._normalize_private_message_targets(
                 raw.get("private_message_targets", {})
+            )
+            store["red_packets"] = self._normalize_red_packets(
+                raw.get("red_packets", [])
+            )
+            store["point_snapshots"] = self._normalize_point_snapshots(
+                raw.get("point_snapshots", [])
             )
             store["reset_generation"] = self._normalize_int(
                 raw.get("reset_generation"), 0, minimum=0
@@ -969,10 +1219,17 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
                     pass
 
     async def _save_data_locked(self) -> bool:
+        previous_snapshots = self.data.get("point_snapshots")
+        had_snapshots = "point_snapshots" in self.data
+        self._record_point_snapshot()
         try:
             await asyncio.to_thread(self._write_data_sync)
             return True
         except Exception as exc:
+            if had_snapshots:
+                self.data["point_snapshots"] = previous_snapshots
+            else:
+                self.data.pop("point_snapshots", None)
             logger.error(f"保存积分数据失败: {exc}")
             return False
 
@@ -1324,6 +1581,95 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             raw_values = []
 
         return {item for item in raw_values if item.isdigit()}
+
+    def _get_red_packet_settings(self) -> Dict[str, Any]:
+        packet_cfg = self.config.get("red_packet_settings", {})
+        if not isinstance(packet_cfg, dict):
+            packet_cfg = {}
+
+        return {
+            "enabled": bool(packet_cfg.get("enabled", True)),
+            "max_total_points": min(
+                self._normalize_int(
+                    packet_cfg.get("max_total_points"), 100000, minimum=1
+                ),
+                1_000_000_000,
+            ),
+            "max_count": min(
+                self._normalize_int(packet_cfg.get("max_count"), 100, minimum=1),
+                10000,
+            ),
+            "expire_minutes": min(
+                self._normalize_int(
+                    packet_cfg.get("expire_minutes"), 1440, minimum=0
+                ),
+                525600,
+            ),
+        }
+
+    @staticmethod
+    def _red_packet_type(raw_type: Any) -> str:
+        normalized = str(raw_type or "").strip().casefold()
+        if normalized in {"固定", "固定红包", "定额", "fixed"}:
+            return "fixed"
+        if normalized in {
+            "拼手气",
+            "拼手气红包",
+            "随机",
+            "随机红包",
+            "lucky",
+        }:
+            return "lucky"
+        if normalized in {"口令", "口令红包", "password"}:
+            return "password"
+        return ""
+
+    @staticmethod
+    def _red_packet_help() -> str:
+        return (
+            "用法：/积分红包 固定 每份积分 份数；"
+            "/积分红包 拼手气 总积分 份数；"
+            "/积分红包 口令 总积分 份数 口令。"
+            "创建后，成员发送 /抢红包 编号，口令红包需追加口令。"
+        )
+
+    @staticmethod
+    def _red_packet_password_hash(password: str) -> str:
+        return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+    def _red_packet_expired(self, packet: Dict[str, Any]) -> bool:
+        expires_at = self._normalize_text(packet.get("expires_at")).strip()
+        if not expires_at:
+            return False
+        try:
+            return datetime.datetime.now() >= datetime.datetime.fromisoformat(expires_at)
+        except ValueError:
+            return False
+
+    def _red_packet_claim_amount(self, packet: Dict[str, Any]) -> int:
+        remaining_points = self._normalize_int(
+            packet.get("remaining_points"), 0, minimum=0
+        )
+        remaining_count = self._normalize_int(
+            packet.get("remaining_count"), 0, minimum=0
+        )
+        if remaining_points <= 0 or remaining_count <= 0:
+            return 0
+        if remaining_points < remaining_count:
+            return 0
+
+        if packet.get("packet_type") == "fixed":
+            return min(
+                self._normalize_int(packet.get("unit_points"), 1, minimum=1),
+                remaining_points,
+            )
+        if remaining_count == 1:
+            return remaining_points
+
+        # 先为剩余份数预留最低 1 积分，再围绕平均值随机分配。
+        max_amount = max(1, (remaining_points // remaining_count) * 2)
+        max_amount = min(max_amount, remaining_points - remaining_count + 1)
+        return random.randint(1, max_amount)
 
     def _get_exchange_settings(self) -> Dict[str, Any]:
         exchange_cfg = self.config.get("exchange_settings", {})
@@ -2683,6 +3029,8 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
                 f"15. 自定义兑换物：当前有 {len(exchange_items)} 种，"
                 "发送 /兑换列表 查看价格和库存"
             )
+        if self._get_red_packet_settings()["enabled"]:
+            lines.append("积分红包：管理员可发送固定、拼手气或口令红包，群成员发送 /抢红包 编号领取")
         negative_rule_no = 16 if exchange_items else 15
         lines.append(
             f"{negative_rule_no}. 负分规则：负分用户只能通过每日签到恢复积分，无法参与抽奖；"
@@ -3068,6 +3416,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
                     ),
                     "item_name": item["name"],
                     "user_id": sender_id,
+                    "group_id": self._get_group_id(event) or "",
                     "redeemed_at": now,
                     "cost": item["cost"],
                     "delivery_status": (
@@ -3282,6 +3631,328 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         async for result in self._admin_modify_points(event, is_add=False):
             yield result
 
+    @filter.command("积分红包", alias={"发红包"})
+    async def create_red_packet(self, event: AstrMessageEvent):
+        """（积分管理员）创建固定、拼手气或口令红包。"""
+        permission_error = await self._ensure_points_admin(event)
+        if permission_error:
+            yield self._plain_result(event, permission_error)
+            return
+
+        settings = self._get_red_packet_settings()
+        if not settings["enabled"]:
+            yield self._plain_result(event, "积分红包功能当前未开启，请联系管理员调整配置。")
+            return
+
+        group_id = self._get_group_id(event)
+        if not group_id:
+            yield self._plain_result(event, "请在群聊中创建积分红包，方便群成员领取。")
+            return
+
+        raw_args = self._normalize_command_text(self._get_command_args(event))
+        parts = raw_args.split()
+        if not parts:
+            yield self._plain_result(event, self._red_packet_help())
+            return
+
+        packet_type = self._red_packet_type(parts[0])
+        if not packet_type:
+            yield self._plain_result(
+                event,
+                "红包类型暂不识别，请使用“固定”“拼手气”或“口令”。"
+                + self._red_packet_help(),
+            )
+            return
+
+        if len(parts) < 3:
+            yield self._plain_result(event, self._red_packet_help())
+            return
+
+        try:
+            first_amount = int(parts[1])
+            count = int(parts[2])
+        except (TypeError, ValueError):
+            yield self._plain_result(event, "积分和份数需要填写正整数。" + self._red_packet_help())
+            return
+
+        if first_amount <= 0 or count <= 0:
+            yield self._plain_result(event, "积分和份数需要填写正整数。" + self._red_packet_help())
+            return
+        if count > settings["max_count"]:
+            yield self._plain_result(
+                event,
+                f"这个红包最多设置 {settings['max_count']} 份，可在 red_packet_settings.max_count 中调整。",
+            )
+            return
+
+        password = ""
+        if packet_type == "password":
+            password = " ".join(parts[3:]).strip()
+            if not password:
+                yield self._plain_result(
+                    event,
+                    "口令红包还需要填写口令，例如：/积分红包 口令 100 5 春日快乐。",
+                )
+                return
+            if len(password) > 80:
+                yield self._plain_result(event, "口令最多 80 个字符，请换一个简短口令。")
+                return
+
+        if packet_type == "fixed":
+            unit_points = first_amount
+            try:
+                total_points = unit_points * count
+            except (OverflowError, MemoryError):
+                total_points = settings["max_total_points"] + 1
+        else:
+            unit_points = 0
+            total_points = first_amount
+
+        if total_points > settings["max_total_points"]:
+            yield self._plain_result(
+                event,
+                f"这个红包最多发放 {settings['max_total_points']} {self._get_points_name()}，"
+                "可在 red_packet_settings.max_total_points 中调整。",
+            )
+            return
+        if packet_type != "fixed" and total_points < count:
+            yield self._plain_result(
+                event,
+                f"拼手气或口令红包的总积分至少需要 {count} {self._get_points_name()}，"
+                "这样每一份都能正常发放。",
+            )
+            return
+
+        packet_id = ""
+        now = datetime.datetime.now()
+        expires_at = ""
+        if settings["expire_minutes"] > 0:
+            expires_at = (
+                now + datetime.timedelta(minutes=settings["expire_minutes"])
+            ).isoformat(timespec="seconds")
+
+        create_error = ""
+        async with self._data_lock:
+            packets = self.data.setdefault("red_packets", [])
+            existing_ids = {
+                self._normalize_text(item.get("packet_id")).casefold()
+                for item in packets
+                if isinstance(item, dict)
+            }
+            for _ in range(5):
+                candidate = uuid.uuid4().hex[:8].casefold()
+                if candidate not in existing_ids:
+                    packet_id = candidate
+                    break
+            if not packet_id:
+                create_error = "暂时无法生成红包编号，请稍后再试。"
+            else:
+                packet = {
+                    "packet_id": packet_id,
+                    "packet_type": packet_type,
+                    "total_points": total_points,
+                    "remaining_points": total_points,
+                    "total_count": count,
+                    "remaining_count": count,
+                    "unit_points": unit_points,
+                    "claimed_user_ids": [],
+                    "group_id": group_id,
+                    "sender_id": self._normalize_user_id(event.get_sender_id()),
+                    "password_hash": self._red_packet_password_hash(password)
+                    if packet_type == "password"
+                    else "",
+                    "created_at": now.isoformat(timespec="seconds"),
+                    "expires_at": expires_at,
+                    "reset_generation": self._normalize_int(
+                        self.data.get("reset_generation"), 0, minimum=0
+                    ),
+                }
+                packets.append(packet)
+                if not await self._save_data_locked():
+                    packets.pop()
+                    create_error = "红包保存失败，本次没有发出积分，请稍后再试。"
+
+        if create_error:
+            yield self._plain_result(event, create_error)
+            return
+
+        log_operations, _ = self._get_admin_settings()
+        if log_operations:
+            logger.info(
+                f"管理员 {event.get_sender_id()} 创建积分红包: packet={packet_id}, "
+                f"type={packet_type}, total={total_points}, count={count}, group={group_id}"
+            )
+
+        type_text = {
+            "fixed": f"每份 {unit_points} {self._get_points_name()}",
+            "lucky": f"总额 {total_points} {self._get_points_name()}",
+            "password": f"总额 {total_points} {self._get_points_name()}（需口令）",
+        }[packet_type]
+        claim_hint = (
+            "群成员发送 /抢红包 口令领取。"
+            if packet_type == "password"
+            else "群成员发送 /抢红包 即可领取。"
+        )
+        yield self._plain_result(
+            event,
+            f"积分红包已发出，编号 {packet_id.upper()}，{type_text}，共 {count} 份。"
+            + claim_hint,
+        )
+
+    @filter.command("抢红包", alias={"领红包", "红包"})
+    async def claim_red_packet(self, event: AstrMessageEvent):
+        """领取群内积分红包；口令红包需附带口令。"""
+        group_id = self._get_group_id(event)
+        if not group_id:
+            yield self._plain_result(event, "请在红包所在群聊中领取积分红包。")
+            return
+
+        raw_args = self._normalize_command_text(self._get_command_args(event))
+        packet_id = ""
+        supplied_password = ""
+        if raw_args:
+            parts = raw_args.split(maxsplit=1)
+            candidate_id = parts[0].casefold()
+            if re.fullmatch(r"[a-z0-9]{6,32}", candidate_id):
+                packet_id = candidate_id
+                supplied_password = parts[1].strip() if len(parts) > 1 else ""
+            else:
+                supplied_password = raw_args
+
+        sender_id = self._normalize_user_id(event.get_sender_id())
+        points_name = self._get_points_name()
+        amount = 0
+        remaining_count = 0
+        claim_error = ""
+        lucky_winner_name = ""
+        lucky_winner_amount = 0
+        async with self._data_lock:
+            packets = self.data.setdefault("red_packets", [])
+            if packet_id:
+                packet = next(
+                    (
+                        item
+                        for item in packets
+                        if isinstance(item, dict)
+                        and self._normalize_text(item.get("packet_id")).casefold()
+                        == packet_id
+                    ),
+                    None,
+                )
+            else:
+                packet = next(
+                    (
+                        item
+                        for item in reversed(packets)
+                        if isinstance(item, dict)
+                        and self._normalize_user_id(item.get("group_id")) == group_id
+                        and (
+                            not supplied_password
+                            or item.get("packet_type") == "password"
+                        )
+                        and not self._red_packet_expired(item)
+                        and self._normalize_int(
+                            item.get("remaining_count"), 0, minimum=0
+                        ) > 0
+                    ),
+                    None,
+                )
+            if packet is None:
+                claim_error = (
+                    "当前群没有可领取的积分红包，等管理员发一个新的吧。"
+                    if not packet_id
+                    else "没有找到这个红包编号，请核对后再试。"
+                )
+            elif self._normalize_user_id(packet.get("group_id")) != group_id:
+                claim_error = "这个红包不在当前群，请回到发红包的群里领取。"
+            elif self._red_packet_expired(packet):
+                claim_error = "这个红包已经过期了，看看群里有没有新的红包吧。"
+            elif self._normalize_int(packet.get("remaining_count"), 0, minimum=0) <= 0:
+                claim_error = "这个红包已经被领完了，下次早点来。"
+            else:
+                claimed_user_ids = packet.setdefault("claimed_user_ids", [])
+                if sender_id in claimed_user_ids:
+                    claim_error = "你已经领过这个红包了，每人只能领取一次。"
+                elif packet.get("packet_type") == "password":
+                    expected_hash = self._normalize_text(packet.get("password_hash"))
+                    supplied_hash = self._red_packet_password_hash(supplied_password)
+                    if not supplied_password or not hmac.compare_digest(
+                        expected_hash, supplied_hash
+                    ):
+                        claim_error = "口令不正确，请核对后再试。"
+
+                if not claim_error:
+                    amount = self._red_packet_claim_amount(packet)
+                    if amount <= 0:
+                        claim_error = "这个红包暂时没有可领取的积分。"
+                    else:
+                        self._touch_group_member(
+                            event, sender_id, self._get_sender_display_name(event)
+                        )
+                        old_points = self._get_user_record(sender_id)["points"]
+                        old_remaining_points = packet["remaining_points"]
+                        old_remaining_count = packet["remaining_count"]
+                        packet["remaining_points"] -= amount
+                        packet["remaining_count"] -= 1
+                        claimed_user_ids.append(sender_id)
+                        claimed_records = packet.setdefault("claimed_records", [])
+                        claimed_records.append(
+                            {
+                                "user_id": sender_id,
+                                "display_name": self._safe_reply_name(
+                                    self._get_sender_display_name(event)
+                                ),
+                                "amount": amount,
+                            }
+                        )
+                        self._get_user_record(sender_id)["points"] += amount
+                        if not await self._save_data_locked():
+                            packet["remaining_points"] = old_remaining_points
+                            packet["remaining_count"] = old_remaining_count
+                            claimed_user_ids.pop()
+                            claimed_records.pop()
+                            self._get_user_record(sender_id)["points"] = old_points
+                            claim_error = "红包领取记录保存失败，请稍后再试。"
+                        else:
+                            remaining_count = packet["remaining_count"]
+                            if (
+                                packet.get("packet_type") == "lucky"
+                                and remaining_count == 0
+                                and len(claimed_records)
+                                >= self._normalize_int(
+                                    packet.get("total_count"), 0, minimum=0
+                                )
+                            ):
+                                winner = max(
+                                    claimed_records,
+                                    key=lambda record: record.get("amount", 0),
+                                )
+                                lucky_winner_name = self._safe_reply_name(
+                                    winner.get("display_name")
+                                    or f"用户({self._mask_user_id(winner.get('user_id', ''))})"
+                                )
+                                lucky_winner_amount = self._normalize_int(
+                                    winner.get("amount"), amount, minimum=1
+                                )
+
+        if claim_error:
+            yield self._plain_result(event, claim_error)
+            return
+
+        if remaining_count:
+            suffix = f"还剩 {remaining_count} 份。"
+        else:
+            suffix = "这个红包已经领完了。"
+            if lucky_winner_name:
+                suffix += (
+                    f"手气王是 {lucky_winner_name}，领到 {lucky_winner_amount} "
+                    f"{points_name}。"
+                )
+        yield self._plain_result(
+            event,
+            f"恭喜你领到 {amount} {points_name}！{suffix}",
+        )
+
     @filter.command("清空所有数据")
     async def clear_all_points_data(self, event: AstrMessageEvent):
         """（积分管理员）清空全部积分数据。用法：/清空所有数据 确认"""
@@ -3293,7 +3964,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         if self._normalize_text(self._get_command_args(event)) != "确认":
             yield self._plain_result(
                 event,
-                "该操作会清空所有积分、抽奖、生日和群记录（兑换记录会保留），"
+                "该操作会清空所有积分、抽奖、红包、生日和群记录（兑换记录会保留），"
                 "请发送 /清空所有数据 确认 继续。",
             )
             return
