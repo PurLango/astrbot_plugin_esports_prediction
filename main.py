@@ -64,6 +64,10 @@ DEFAULT_TEMPLATES = {
     "query_points": "{user}这边查到你现在有 {total} {name}，已连签 {streak} 天，累计签到 {total_sign_in_days} 天，今日状态是 {sign_in_status}。",
 }
 COMMAND_PREFIXES = ("/", "!", "#", "。", "！", "／")
+MESSAGE_ID_SUFFIX_PATTERN = re.compile(
+    r"(?:\s*\[MSG_ID:\s*\d+\])+\s*$",
+    re.IGNORECASE,
+)
 REGISTERED_COMMAND_NAMES = (
     "清空所有数据",
     "兑换头衔",
@@ -95,7 +99,7 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "astrbot_plugin_point_system 是一个面向 AstrBot 群聊场景的积分互动插件，围绕“签到、活跃、抽奖、兑换、管理”这几类高频玩法设计。它支持按群维护成员信息、自动保存数据、定时备份、日期口令奖励，以及负分限制和群头衔联动，适合做群活跃体系或轻量积分经济。",
-    "2.3.0",
+    "2.3.1",
     "https://github.com/menglimi/astrbot_plugin_point_system",
 )
 class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
@@ -194,6 +198,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
 
     def _split_command_text(self, value: Any) -> tuple[str, str]:
         command_text = self._strip_command_prefix(str(value) if value is not None else "")
+        command_text = MESSAGE_ID_SUFFIX_PATTERN.sub("", command_text).rstrip()
         if not command_text:
             return "", ""
 
