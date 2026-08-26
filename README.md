@@ -125,4 +125,3 @@ PandaScore Token 只应保存在 AstrBot 本地配置中，不要发送到群聊
 ## 项目说明
 
 本项目基于 [menglimi/astrbot_plugin_point_system](https://github.com/menglimi/astrbot_plugin_point_system) 扩展开发，原插件提供了积分账户和持久化基础。
-
