@@ -4,6 +4,7 @@ import datetime
 import unittest
 from types import SimpleNamespace
 
+import esports_feature
 from main import PointSystemPlugin
 from esports_provider import PandaScoreProvider
 
@@ -171,6 +172,181 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, [1, 2])
         self.assertEqual(len(result), 102)
+
+
+class FakeSyncProvider:
+    def __init__(self, token, **kwargs):
+        pass
+
+    async def fetch_matches(self, game, state, **kwargs):
+        if game != "lol" or state != "upcoming":
+            return []
+        return [
+            {
+                "id": 555001,
+                "status": "not_started",
+                "begin_at": "2026-08-28T12:00:00Z",
+                "opponents": [{"id": 101, "name": "Alpha"}, {"id": 102, "name": "Beta"}],
+                "league": {"name": "LPL", "slug": "lpl"},
+                "serie": {"name": "Summer 2026"},
+            },
+            {
+                "id": 555002,
+                "status": "not_started",
+                "begin_at": "2026-08-28T13:00:00Z",
+                "opponents": [{"id": 201, "name": "Gamma"}, {"id": 202, "name": "Delta"}],
+                "league": {"name": "LJL", "slug": "ljl"},
+                "serie": {"name": "Summer 2026"},
+            },
+            {
+                "id": 555003,
+                "status": "not_started",
+                "begin_at": "2026-08-28T14:00:00Z",
+                "opponents": [{"id": 301, "name": "Epsilon"}, {"id": 302, "name": "Zeta"}],
+                "league": {"name": "LCK Challengers", "slug": "lck-challengers"},
+                "serie": {"name": "Summer 2026"},
+            },
+        ]
+
+
+class EsportsCandidateSyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sync_routes_untracked_matches_to_candidates(self):
+        plugin = build_plugin()
+        original = esports_feature.PandaScoreProvider
+        esports_feature.PandaScoreProvider = FakeSyncProvider
+        try:
+            result = await plugin._sync_esports_once("测试")
+        finally:
+            esports_feature.PandaScoreProvider = original
+
+        store = plugin._get_esports_store()
+        self.assertIn("pandascore:lol:555001", store["matches"])
+        self.assertNotIn("pandascore:lol:555002", store["matches"])
+        self.assertIn("pandascore:lol:555002", store["candidates"])
+        self.assertIn("pandascore:lol:555003", store["candidates"])
+        self.assertFalse(store["candidates"]["pandascore:lol:555002"]["dismissed"])
+        self.assertEqual(result["candidates"], 2)
+
+    async def test_sync_keeps_dismissed_flag_on_candidates(self):
+        plugin = build_plugin()
+        store = plugin._get_esports_store()
+        store["candidates"]["pandascore:lol:555002"] = {
+            "id": "pandascore:lol:555002",
+            "display_id": "",
+            "source": "pandascore",
+            "source_id": "555002",
+            "game": "lol",
+            "competition": "LJL 2026 Summer",
+            "stage": "",
+            "name": "Gamma vs Delta",
+            "start_time": "2026-08-28T13:00:00Z",
+            "status": "not_started",
+            "teams": [
+                {"id": "555002:team1", "name": "Gamma", "code": "", "image_url": "", "score": 0},
+                {"id": "555002:team2", "name": "Delta", "code": "", "image_url": "", "score": 0},
+            ],
+            "winner_id": "",
+            "odds": {},
+            "probabilities": {},
+            "odds_locked": False,
+            "visible": True,
+            "settled_at": "",
+            "created_at": "",
+            "updated_at": "",
+            "dismissed": True,
+            "first_seen_at": "2026-08-25T00:00:00+00:00",
+        }
+        original = esports_feature.PandaScoreProvider
+        esports_feature.PandaScoreProvider = FakeSyncProvider
+        try:
+            await plugin._sync_esports_once("测试")
+        finally:
+            esports_feature.PandaScoreProvider = original
+
+        candidate = plugin._get_esports_store()["candidates"]["pandascore:lol:555002"]
+        self.assertTrue(candidate["dismissed"])
+        self.assertEqual(candidate["first_seen_at"], "2026-08-25T00:00:00+00:00")
+
+    async def test_include_candidate_promotes_match_with_odds(self):
+        plugin = build_plugin()
+        store = plugin._get_esports_store()
+        store["candidates"]["pandascore:lol:555002"] = {
+            "id": "pandascore:lol:555002",
+            "display_id": "",
+            "source": "pandascore",
+            "source_id": "555002",
+            "game": "lol",
+            "competition": "LJL 2026 Summer",
+            "stage": "",
+            "name": "Gamma vs Delta",
+            "start_time": "2026-08-28T13:00:00Z",
+            "status": "not_started",
+            "teams": [
+                {"id": "555002:team1", "name": "Gamma", "code": "", "image_url": "", "score": 0},
+                {"id": "555002:team2", "name": "Delta", "code": "", "image_url": "", "score": 0},
+            ],
+            "winner_id": "",
+            "odds": {},
+            "probabilities": {},
+            "odds_locked": False,
+            "visible": True,
+            "settled_at": "",
+            "created_at": "",
+            "updated_at": "",
+            "dismissed": False,
+            "first_seen_at": "",
+        }
+
+        match = plugin._include_candidate_locked("pandascore:lol:555002")
+
+        self.assertIsNotNone(match)
+        self.assertIn("pandascore:lol:555002", store["matches"])
+        self.assertNotIn("pandascore:lol:555002", store["candidates"])
+        self.assertTrue(match["display_id"])
+        self.assertEqual(len(match["odds"]), 2)
+        self.assertNotIn("dismissed", match)
+        self.assertNotIn("first_seen_at", match)
+
+    async def test_sync_removes_expired_candidates(self):
+        plugin = build_plugin()
+        store = plugin._get_esports_store()
+        stale_start = (
+            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=5)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        store["candidates"]["pandascore:lol:424242"] = {
+            "id": "pandascore:lol:424242",
+            "display_id": "",
+            "source": "pandascore",
+            "source_id": "424242",
+            "game": "lol",
+            "competition": "LJL 2026 Summer",
+            "stage": "",
+            "name": "Old vs Older",
+            "start_time": stale_start,
+            "status": "not_started",
+            "teams": [
+                {"id": "424242:team1", "name": "Old", "code": "", "image_url": "", "score": 0},
+                {"id": "424242:team2", "name": "Older", "code": "", "image_url": "", "score": 0},
+            ],
+            "winner_id": "",
+            "odds": {},
+            "probabilities": {},
+            "odds_locked": False,
+            "visible": True,
+            "settled_at": "",
+            "created_at": "",
+            "updated_at": "",
+            "dismissed": False,
+            "first_seen_at": "",
+        }
+        original = esports_feature.PandaScoreProvider
+        esports_feature.PandaScoreProvider = FakeSyncProvider
+        try:
+            await plugin._sync_esports_once("测试")
+        finally:
+            esports_feature.PandaScoreProvider = original
+
+        self.assertNotIn("pandascore:lol:424242", store["candidates"])
 
 
 if __name__ == "__main__":

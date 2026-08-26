@@ -1,6 +1,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.playwright-cli/
+output/
 .env
 data/
 _release_repo_tmp/

@@ -420,6 +420,65 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
 .setting-switch input:checked { border-color: var(--green); background: var(--green); }
 .setting-switch input:checked::after { transform: translateX(16px); }
 
+.esports-heading { align-items: center; }
+.esports-heading-actions { display: flex; align-items: center; gap: 10px; }
+.esports-metrics { margin-top: 14px; }
+.esports-control-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(360px, .8fr); gap: 10px; margin-top: 10px; }
+.esports-card { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); }
+.esports-card-heading { min-height: 40px; display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.esports-card-heading h3 { margin: 3px 0 0; font-size: 15px; }
+.esports-card-heading p { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.esports-card-heading .compact-button { flex: 0 0 auto; }
+.esports-form-grid { display: grid; grid-template-columns: minmax(0, 1fr) 180px; gap: 12px; margin-top: 16px; }
+.esports-form-grid.manual-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.esports-field { min-width: 0; display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 750; }
+.esports-field.full { grid-column: 1 / -1; }
+.esports-field input, .esports-field textarea, .esports-field select { width: 100%; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--panel-soft); outline: none; }
+.esports-field input, .esports-field select { height: 38px; padding: 0 10px; }
+.esports-field textarea { min-height: 91px; padding: 9px 10px; resize: vertical; line-height: 1.5; }
+.esports-field input:focus, .esports-field textarea:focus, .esports-field select:focus { border-color: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 12%, transparent); }
+.esports-switches { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+.esports-switches label { min-height: 31px; display: inline-flex; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: var(--panel-soft); font-size: 10px; font-weight: 700; cursor: pointer; }
+.esports-switches input { width: 14px; height: 14px; accent-color: var(--green); }
+.esports-table-card { margin-top: 10px; padding: 0; overflow: hidden; }
+.esports-table-card .esports-card-heading { align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+.esports-search { width: min(330px, 42%); flex: 0 1 330px; }
+.esports-table-wrap { max-width: 100%; overflow: auto; }
+.esports-table { width: 100%; min-width: 1040px; border-collapse: collapse; }
+.esports-table.bets-table { min-width: 760px; }
+.esports-table th, .esports-table td { padding: 12px 13px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+.esports-table tr:last-child td { border-bottom: 0; }
+.esports-table th { color: var(--faint); background: var(--panel-soft); font-size: 9px; font-weight: 800; letter-spacing: .06em; }
+.esports-table td { color: var(--muted); font-size: 10px; }
+.esports-table td:first-child { color: var(--ink); }
+.esports-table td > strong, .esports-table td > span, .esports-table td > small { display: block; }
+.esports-table td > strong { font-size: 11px; }
+.esports-table td > small { margin-top: 4px; color: var(--faint); font-size: 9px; }
+.esports-time { color: var(--ink); white-space: nowrap; }
+.esports-team-line { min-width: 230px; display: grid; grid-template-columns: minmax(90px, 1fr) auto; gap: 10px; padding: 3px 0; }
+.esports-team-line b { overflow: hidden; color: var(--ink); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.esports-team-line span { color: var(--muted); white-space: nowrap; }
+.esports-status { width: fit-content; padding: 3px 7px; border-radius: 4px; color: var(--muted); background: var(--panel-soft); font-size: 9px; font-weight: 800; white-space: nowrap; }
+.esports-status.open { color: var(--green-strong); background: var(--green-soft); }
+.esports-status.live { color: var(--rose); background: var(--rose-soft); }
+.esports-status.done { color: var(--indigo); background: var(--indigo-soft); }
+.esports-actions { min-width: 210px; display: flex; flex-wrap: wrap; gap: 5px; }
+.esports-actions button { min-height: 27px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: var(--panel); font-size: 9px; font-weight: 750; }
+.esports-actions button:hover { color: var(--green-strong); border-color: var(--green); background: var(--green-soft); }
+.esports-actions button:disabled { opacity: .42; cursor: not-allowed; }
+.esports-empty { height: 110px; color: var(--faint) !important; text-align: center !important; vertical-align: middle !important; }
+.esports-candidate-tools { display: flex; align-items: center; gap: 10px; }
+.esports-toggle { min-height: 32px; display: inline-flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: var(--panel-soft); font-size: 10px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.esports-toggle input { width: 14px; height: 14px; accent-color: var(--green); }
+.esports-candidate-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 18px; border-bottom: 1px solid var(--line); background: var(--panel-soft); }
+.esports-candidate-bar[hidden] { display: none; }
+.esports-candidate-bar > span { color: var(--ink); font-size: 10px; font-weight: 750; }
+.esports-candidate-bar-actions { display: flex; gap: 8px; }
+.esports-table.candidates-table { min-width: 880px; }
+.esports-table.candidates-table .check-col { width: 34px; text-align: center; }
+.esports-table.candidates-table .check-col input { width: 14px; height: 14px; accent-color: var(--green); vertical-align: middle; }
+.esports-table.candidates-table tr.dismissed-row td { opacity: .55; }
+
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes page-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 900px) {
@@ -432,6 +491,7 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
   .economy-band { grid-template-columns: 1fr; }
   .settings-layout { grid-template-columns: 176px minmax(0, 1fr); }
   .settings-fields { grid-template-columns: 1fr; }
+  .esports-control-grid { grid-template-columns: 1fr; }
   .metric-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metric:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }
   .metric:nth-child(4) { border-top: 1px solid var(--line); }
@@ -452,6 +512,7 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
   .main-content { padding: 12px; }
   .workspace-nav { top: var(--topbar-height); margin: -12px -12px 16px; padding: 7px 12px; }
   .workspace-tab { flex: 1; justify-content: center; padding: 0 7px; }
+  .workspace-tab { min-width: 0; }
   .page-heading { min-height: 0; align-items: flex-start; flex-direction: column; }
   .page-heading h2 { font-size: 19px; }
   .updated-at { padding: 0; }
@@ -476,6 +537,17 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
   .trend-chart { height: 200px; gap: 4px; }
   .chart-legend { justify-content: flex-start; }
   .panel-heading { flex-direction: column; }
+  .esports-heading-actions { width: 100%; justify-content: space-between; }
+  .esports-card { padding: 15px 13px; }
+  .esports-card-heading { align-items: stretch; flex-direction: column; }
+  .esports-card-heading .compact-button { width: 100%; }
+  .esports-form-grid, .esports-form-grid.manual-grid { grid-template-columns: 1fr; }
+  .esports-field.full { grid-column: auto; }
+  .esports-switches { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .esports-switches label { padding: 7px 9px; }
+  .esports-table-card { padding: 0; }
+  .esports-table-card .esports-card-heading { padding: 14px; }
+  .esports-search { width: 100%; flex-basis: auto; }
   .economy-band { padding: 15px 13px; }
   .economy-items { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 0; }
   .economy-items > div:nth-child(odd) { border-left: 0; }

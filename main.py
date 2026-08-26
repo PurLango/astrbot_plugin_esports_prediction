@@ -31,7 +31,7 @@ except ImportError:
     from lottery_feature import LotteryFeatureMixin
 
 PLUGIN_NAME = "astrbot_plugin_point_system"
-DATA_VERSION = 12
+DATA_VERSION = 13
 POINT_SNAPSHOT_BUCKET_MINUTES = 15
 POINT_SNAPSHOT_RETENTION_DAYS = 90
 POINT_SNAPSHOT_MAX_RECORDS = 10000
@@ -114,7 +114,7 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "赛事积分竞猜是一个面向 AstrBot 群聊的电竞赛事竞猜与积分互动插件，支持 LoL、VALORANT 赛程同步、动态倍率、积分下注、自动结算，以及签到、抽奖和兑换等积分功能。",
-    "2.4.0",
+    "2.4.1",
     "https://github.com/PurLango/astrbot_plugin_esports_prediction",
 )
 class PointSystemPlugin(

@@ -3,7 +3,7 @@
 
   const DEFAULT_TEMPLATE = "兑换成功！\n兑换物：{item}\n兑换内容：{content}\n消耗 {cost} {points_name}，剩余 {remaining} {points_name}。";
   const DEFAULT_SCOPE = { mode: "blacklist", scope: [] };
-  const state = { data: null, draft: [], scope: { ...DEFAULT_SCOPE }, settingsDraft: {}, selected: -1, dirty: false, settingsDirty: false, saving: false, settingsSaving: false, saveStatus: "clean", page: "overview", view: "inventory", theme: "system", groupId: "", groupQuery: "", historyRange: "7d", dashboardLoading: false, dashboardRequest: 0 };
+  const state = { data: null, draft: [], scope: { ...DEFAULT_SCOPE }, settingsDraft: {}, selected: -1, dirty: false, settingsDirty: false, saving: false, settingsSaving: false, saveStatus: "clean", page: "overview", view: "inventory", theme: "system", groupId: "", groupQuery: "", historyRange: "7d", dashboardLoading: false, dashboardRequest: 0, esportsData: null, esportsQuery: "", esportsLoading: false, esportsCandidateQuery: "", esportsCandidateShowDismissed: false, esportsCandidateSelected: new Set() };
   let saveStateTimer = 0;
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -136,6 +136,17 @@
     return result?.data ?? result;
   }
 
+  async function requestEsports(method, path, body = {}) {
+    const api = await bridge();
+    const endpoint = `esports/${String(path || "").replace(/^\/+/, "")}`.replace(/\/{2,}/g, "/");
+    const result = method === "GET" ? await api.apiGet(endpoint) : await api.apiPost(endpoint, body);
+    const data = result?.data ?? result;
+    if (result?.status === "error" || data?.ok === false) {
+      throw new Error(data?.error || result?.message || "请求失败");
+    }
+    return data;
+  }
+
   function toast(message, kind = "success") {
     const node = document.createElement("div");
     node.className = `toast ${kind}`;
@@ -148,7 +159,7 @@
   function setConnection(kind, text) {
     const node = $("#connectionState");
     node.className = `connection-state ${kind}`;
-    node.innerHTML = `<i data-lucide="${kind === "ok" ? "cloud-check" : kind === "error" ? "cloud-off" : "loader-circle"}"></i>${escapeHtml(text)}`;
+    node.innerHTML = `<i data-lucide="${kind === "ok" ? "circle-check" : kind === "error" ? "circle-alert" : "loader-circle"}"></i>${escapeHtml(text)}`;
     icons();
   }
 
@@ -599,8 +610,210 @@
     return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(date);
   }
 
+  function esportsStatusName(value) {
+    return ({ not_started: "待开赛", running: "进行中", closed: "已封盘", finished: "待结算", settled: "已结算", refunded: "已退款", canceled: "已取消", postponed: "已延期" })[value] || value || "未知";
+  }
+
+  function esportsBetStatusName(value) {
+    return ({ pending: "待结算", won: "命中", lost: "未命中", refunded: "已退款", withdrawn: "已撤单" })[value] || value || "未知";
+  }
+
+  function renderEsportsTables() {
+    const data = state.esportsData;
+    if (!data) return;
+    const query = state.esportsQuery.toLocaleLowerCase();
+    const matches = (data.matches || []).filter((item) => !query || `${item.display_id} ${item.competition} ${item.name}`.toLocaleLowerCase().includes(query));
+    $("#esportsMatchRows").innerHTML = matches.length ? matches.map((match) => {
+      const [teamA, teamB] = match.teams || [];
+      if (!teamA || !teamB) return "";
+      const terminal = ["settled", "refunded", "canceled", "postponed"].includes(match.status);
+      const statusClass = terminal ? "done" : match.status === "running" ? "live" : "open";
+      return `<tr>
+        <td><strong>${escapeHtml(match.display_id)}</strong><small>${escapeHtml(String(match.game || "").toUpperCase())} · ${escapeHtml(match.competition)}</small><span>${escapeHtml(match.name)}</span></td>
+        <td><span class="esports-time">${escapeHtml(match.start_time_text)}</span></td>
+        <td><div class="esports-team-line"><b>${escapeHtml(teamA.name)}</b><span>${Number(teamA.probability || 0).toLocaleString("zh-CN", { style: "percent", maximumFractionDigits: 1 })} · ${Number(teamA.odds || 1).toFixed(2)} · ${formatNumber(teamA.pool)}</span></div><div class="esports-team-line"><b>${escapeHtml(teamB.name)}</b><span>${Number(teamB.probability || 0).toLocaleString("zh-CN", { style: "percent", maximumFractionDigits: 1 })} · ${Number(teamB.odds || 1).toFixed(2)} · ${formatNumber(teamB.pool)}</span></div></td>
+        <td><span class="esports-status ${statusClass}">${escapeHtml(esportsStatusName(match.status))}</span><small>${match.visible ? "群内可见" : "已隐藏"}${match.odds_locked ? " · 倍率已锁" : ""}</small></td>
+        <td><div class="esports-actions"><button type="button" data-esports-action="settle" data-match="${escapeHtml(match.id)}" data-team="${escapeHtml(teamA.id)}" ${terminal ? "disabled" : ""}>A 胜</button><button type="button" data-esports-action="settle" data-match="${escapeHtml(match.id)}" data-team="${escapeHtml(teamB.id)}" ${terminal ? "disabled" : ""}>B 胜</button><button type="button" data-esports-action="refund" data-match="${escapeHtml(match.id)}" ${terminal ? "disabled" : ""}>退款</button><button type="button" data-esports-action="close" data-match="${escapeHtml(match.id)}" ${terminal ? "disabled" : ""}>封盘</button><button type="button" data-esports-action="${match.visible ? "hide" : "show"}" data-match="${escapeHtml(match.id)}">${match.visible ? "隐藏" : "显示"}</button></div></td>
+      </tr>`;
+    }).join("") : '<tr><td class="esports-empty" colspan="5">没有匹配的比赛</td></tr>';
+
+    const bets = (data.bets || []).slice(0, 100);
+    $("#esportsBetRows").innerHTML = bets.length ? bets.map((bet) => `<tr>
+      <td><strong>${escapeHtml(bet.match_display_id)}</strong></td><td>${escapeHtml(bet.user_id)}</td><td>${escapeHtml(bet.team_name)}</td><td>${formatNumber(bet.amount)}</td><td>${Number(bet.odds || 1).toFixed(2)}</td><td><span class="esports-status ${bet.status === "won" ? "open" : ["lost", "refunded", "withdrawn"].includes(bet.status) ? "done" : ""}">${escapeHtml(esportsBetStatusName(bet.status))}</span><small>返还 ${formatNumber(bet.payout)}</small></td>
+    </tr>`).join("") : '<tr><td class="esports-empty" colspan="6">暂无下注记录</td></tr>';
+  }
+
+  function visibleEsportsCandidates() {
+    const data = state.esportsData || {};
+    const query = state.esportsCandidateQuery.toLocaleLowerCase();
+    return (data.candidates || [])
+      .filter((item) => state.esportsCandidateShowDismissed || !item.dismissed)
+      .filter((item) => !query || `${item.competition} ${item.name} ${item.game}`.toLocaleLowerCase().includes(query))
+      .sort((a, b) => (a.dismissed === b.dismissed ? String(a.start_time || "").localeCompare(String(b.start_time || "")) : a.dismissed ? 1 : -1));
+  }
+
+  function renderEsportsCandidates() {
+    const summary = state.esportsData?.summary || {};
+    const counts = `当前待选 ${formatNumber(summary.candidate_count)} 场，已忽略 ${formatNumber(summary.dismissed_count)} 场。`;
+    $("#esportsCandidateSummary").textContent = counts;
+    const rows = visibleEsportsCandidates();
+    $("#esportsCandidateRows").innerHTML = rows.length ? rows.map((item) => {
+      const [teamA, teamB] = item.teams || [];
+      if (!teamA || !teamB) return "";
+      const terminal = ["finished", "canceled", "cancelled", "postponed", "abandoned"].includes(item.status);
+      const statusClass = terminal ? "done" : item.status === "running" ? "live" : "open";
+      const checked = state.esportsCandidateSelected.has(item.id) ? "checked" : "";
+      return `<tr class="${item.dismissed ? "dismissed-row" : ""}">
+        <td class="check-col"><input type="checkbox" data-candidate-check="${escapeHtml(item.id)}" ${checked} ${item.dismissed ? "" : terminal ? "disabled" : ""} aria-label="选择 ${escapeHtml(item.name)}" /></td>
+        <td><strong>${escapeHtml(String(item.game || "").toUpperCase())} · ${escapeHtml(item.competition)}</strong><span>${escapeHtml(teamA.name)} vs ${escapeHtml(teamB.name)}</span></td>
+        <td><span class="esports-time">${escapeHtml(item.start_time_text)}</span></td>
+        <td><span class="esports-status ${statusClass}">${escapeHtml(esportsStatusName(item.status))}</span>${item.dismissed ? "<small>已忽略</small>" : ""}</td>
+        <td><div class="esports-actions">${item.dismissed
+          ? `<button type="button" data-candidate-action="restore" data-match="${escapeHtml(item.id)}">恢复</button>`
+          : `<button type="button" data-candidate-action="include" data-match="${escapeHtml(item.id)}" ${terminal ? "disabled title=\"比赛已结束，无法加入竞猜\"" : ""}>加入</button><button type="button" data-candidate-action="dismiss" data-match="${escapeHtml(item.id)}">忽略</button>`}</div></td>
+      </tr>`;
+    }).join("") : `<tr><td class="esports-empty" colspan="5">${state.esportsCandidateShowDismissed ? "没有匹配的候选比赛" : "暂无候选比赛，可在同步后从数据源挑选"}</td></tr>`;
+    const selectable = rows.filter((item) => !item.dismissed && !["finished", "canceled", "cancelled", "postponed", "abandoned"].includes(item.status));
+    $("#esportsCandidateAll").checked = selectable.length > 0 && selectable.every((item) => state.esportsCandidateSelected.has(item.id));
+    updateEsportsCandidateBar();
+  }
+
+  function updateEsportsCandidateBar() {
+    const bar = $("#esportsCandidateBar");
+    const count = state.esportsCandidateSelected.size;
+    bar.hidden = count === 0;
+    $("#esportsCandidateSelectedLabel").textContent = `已选 ${count} 场`;
+  }
+
+  async function handleEsportsCandidateAction(button) {
+    const action = button.dataset.candidateAction;
+    const matchId = button.dataset.match;
+    button.disabled = true;
+    const done = await postEsports("candidates/action", { action, match_ids: [matchId] }, "操作完成");
+    if (done) state.esportsCandidateSelected.delete(matchId);
+    else button.disabled = false;
+  }
+
+  async function esportsCandidateBulk(action) {
+    const ids = [...state.esportsCandidateSelected];
+    if (!ids.length) return;
+    const done = await postEsports("candidates/action", { action, match_ids: ids }, "操作完成");
+    if (done) state.esportsCandidateSelected.clear();
+  }
+
+  function renderEsports() {
+    const data = state.esportsData;
+    if (!data) return;
+    const summary = data.summary || {};
+    $("#esportsMatchMetric").textContent = formatNumber(summary.match_count);
+    $("#esportsOpenMetric").textContent = formatNumber(summary.open_match_count);
+    $("#esportsBetMetric").textContent = formatNumber(summary.bet_count);
+    $("#esportsPendingMetric").textContent = formatNumber(summary.pending_points, true);
+    const settings = data.settings || {};
+    const games = Array.isArray(settings.games) ? settings.games : [];
+    $("#esportsEnabled").checked = Boolean(settings.enabled);
+    $("#esportsSyncEnabled").checked = Boolean(settings.sync_enabled);
+    $("#esportsSyncInterval").value = settings.sync_interval_minutes ?? 10;
+    $("#esportsCompetitions").value = (settings.tracked_competitions || []).join("\n");
+    $("#esportsGameLol").checked = games.includes("lol");
+    $("#esportsGameValorant").checked = games.includes("valorant");
+    $("#esportsToken").value = "";
+    $("#esportsToken").placeholder = settings.token_configured ? "已配置；留空保持不变" : "粘贴 PandaScore Token";
+    renderEsportsTables();
+    renderEsportsCandidates();
+    icons();
+  }
+
+  async function loadEsports() {
+    if (state.esportsLoading) return;
+    state.esportsLoading = true;
+    setConnection("", "同步竞猜数据");
+    $("#esportsSyncButton").disabled = true;
+    try {
+      state.esportsData = await requestEsports("GET", "overview");
+      renderEsports();
+      $("#esportsUpdatedAt").textContent = `更新于 ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date())}`;
+      setConnection("ok", "已同步");
+    } catch (error) {
+      setConnection("error", "竞猜数据失败");
+      toast(error.message || "无法读取赛事竞猜数据", "error");
+    } finally {
+      state.esportsLoading = false;
+      $("#esportsSyncButton").disabled = false;
+      icons();
+    }
+  }
+
+  async function postEsports(path, body, successMessage) {
+    setConnection("", "正在处理");
+    try {
+      const result = await requestEsports("POST", path, body);
+      toast(result.summary || result.message || successMessage);
+      await loadEsports();
+      return true;
+    } catch (error) {
+      setConnection("error", "操作失败");
+      toast(error.message || "竞猜管理操作失败", "error");
+      return false;
+    }
+  }
+
+  async function syncEsports() {
+    const button = $("#esportsSyncButton");
+    button.disabled = true;
+    button.innerHTML = '<i data-lucide="loader-circle"></i><span>同步中</span>';
+    button.classList.add("loading");
+    icons();
+    try {
+      await postEsports("sync", {}, "同步完成");
+    } finally {
+      button.disabled = false;
+      button.innerHTML = '<i data-lucide="refresh-cw"></i><span>立即同步</span>';
+      button.classList.remove("loading");
+      icons();
+    }
+  }
+
+  async function saveEsportsSettings() {
+    const button = $("#esportsSaveSettingsButton");
+    button.disabled = true;
+    const saved = await postEsports("settings/save", {
+      enabled: $("#esportsEnabled").checked,
+      sync_enabled: $("#esportsSyncEnabled").checked,
+      sync_interval_minutes: Number($("#esportsSyncInterval").value),
+      pandascore_token: $("#esportsToken").value.trim(),
+      games: [$("#esportsGameLol").checked ? "lol" : "", $("#esportsGameValorant").checked ? "valorant" : ""].filter(Boolean),
+      tracked_competitions: uniqueLines($("#esportsCompetitions").value),
+    }, "竞猜设置已保存");
+    button.disabled = false;
+    if (saved) $("#esportsToken").value = "";
+  }
+
+  async function addEsportsMatch() {
+    const rawStart = $("#esportsNewStart").value;
+    const added = await postEsports("matches/add", {
+      game: $("#esportsNewGame").value,
+      competition: $("#esportsNewCompetition").value.trim(),
+      team_a: $("#esportsNewTeamA").value.trim(),
+      team_b: $("#esportsNewTeamB").value.trim(),
+      start_time: rawStart ? rawStart.replace("T", " ") : "",
+    }, "比赛已添加");
+    if (added) {
+      ["#esportsNewCompetition", "#esportsNewTeamA", "#esportsNewTeamB", "#esportsNewStart"].forEach((selector) => { $(selector).value = ""; });
+    }
+  }
+
+  async function handleEsportsAction(button) {
+    const action = button.dataset.esportsAction;
+    const prompts = { settle: "确认按所选队伍获胜结算？", refund: "确认全额退回该场全部待结算下注？", close: "确认立即封盘？", hide: "确认从群内赛事列表隐藏？", show: "确认恢复显示？" };
+    if (!window.confirm(prompts[action] || "确认执行此操作？")) return;
+    button.disabled = true;
+    const completed = await postEsports("matches/action", { action, match_id: button.dataset.match, team_id: button.dataset.team || "" }, "操作完成");
+    if (!completed) button.disabled = false;
+  }
+
   function switchPage(page) {
-    state.page = ["overview", "exchange", "settings"].includes(page) ? page : "overview";
+    state.page = ["overview", "esports", "exchange", "settings"].includes(page) ? page : "overview";
     $$(".workspace-tab").forEach((button) => {
       const active = button.dataset.page === state.page;
       button.classList.toggle("active", active);
@@ -613,6 +826,7 @@
     });
     $("#saveButton").hidden = state.page !== "exchange";
     if (state.page === "settings" && !$("#settingsSections").children.length) renderSettings();
+    if (state.page === "esports" && !state.esportsData) loadEsports();
     icons();
   }
 
@@ -837,7 +1051,7 @@
 
   function bindEvents() {
     $("#themeButton").addEventListener("click", toggleTheme);
-    $("#refreshButton").addEventListener("click", () => loadData());
+    $("#refreshButton").addEventListener("click", () => state.page === "esports" ? loadEsports() : loadData());
     $("#groupFilterButton").addEventListener("click", () => setGroupFilterOpen($("#groupFilterPopover").hidden));
     $("#groupFilterSearch").addEventListener("input", (event) => { state.groupQuery = event.target.value; renderGroupFilterOptions(); });
     $("#groupFilterOptions").addEventListener("click", (event) => {
@@ -852,6 +1066,38 @@
     }));
     $("#saveButton").addEventListener("click", saveData);
     $("#saveSettingsButton").addEventListener("click", saveSettings);
+    $("#esportsSyncButton").addEventListener("click", syncEsports);
+    $("#esportsSaveSettingsButton").addEventListener("click", saveEsportsSettings);
+    $("#esportsAddMatchButton").addEventListener("click", addEsportsMatch);
+    $("#esportsMatchSearch").addEventListener("input", (event) => { state.esportsQuery = event.target.value; renderEsportsTables(); });
+    $("#esportsMatchRows").addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-esports-action]");
+      if (button && !button.disabled) handleEsportsAction(button);
+    });
+    $("#esportsCandidateSearch").addEventListener("input", (event) => { state.esportsCandidateQuery = event.target.value; renderEsportsCandidates(); });
+    $("#esportsCandidateDismissed").addEventListener("change", (event) => { state.esportsCandidateShowDismissed = event.target.checked; renderEsportsCandidates(); });
+    $("#esportsCandidateRows").addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-candidate-action]");
+      if (button && !button.disabled) handleEsportsCandidateAction(button);
+    });
+    $("#esportsCandidateRows").addEventListener("change", (event) => {
+      const checkbox = event.target.closest("input[data-candidate-check]");
+      if (!checkbox) return;
+      const matchId = checkbox.dataset.candidateCheck;
+      if (checkbox.checked) state.esportsCandidateSelected.add(matchId);
+      else state.esportsCandidateSelected.delete(matchId);
+      updateEsportsCandidateBar();
+      const rows = visibleEsportsCandidates().filter((item) => !item.dismissed && !["finished", "canceled", "cancelled", "postponed", "abandoned"].includes(item.status));
+      $("#esportsCandidateAll").checked = rows.length > 0 && rows.every((item) => state.esportsCandidateSelected.has(item.id));
+    });
+    $("#esportsCandidateAll").addEventListener("change", (event) => {
+      const checked = event.target.checked;
+      const rows = visibleEsportsCandidates().filter((item) => !item.dismissed && !["finished", "canceled", "cancelled", "postponed", "abandoned"].includes(item.status));
+      rows.forEach((item) => { if (checked) state.esportsCandidateSelected.add(item.id); else state.esportsCandidateSelected.delete(item.id); });
+      renderEsportsCandidates();
+    });
+    $("#esportsIncludeSelected").addEventListener("click", () => esportsCandidateBulk("include"));
+    $("#esportsDismissSelected").addEventListener("click", () => esportsCandidateBulk("dismiss"));
     $$(".workspace-tab").forEach((button) => button.addEventListener("click", () => switchPage(button.dataset.page)));
     $("#settingsNav").addEventListener("click", (event) => {
       const button = event.target.closest("[data-settings-target]");
@@ -916,6 +1162,7 @@
         event.preventDefault();
         if (state.page === "settings") saveSettings();
         else if (state.page === "exchange") saveData();
+        else if (state.page === "esports") saveEsportsSettings();
       }
     });
   }

@@ -14,7 +14,7 @@
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"><i data-lucide="chart-no-axes-combined"></i></span>
-        <div><h1>积分运营台</h1><p>总览、兑换与规则配置</p></div>
+        <div><h1>积分运营台</h1><p>总览、赛事竞猜、兑换与规则配置</p></div>
       </div>
       <div class="top-actions">
         <span id="saveState" class="save-state" aria-live="polite" hidden><i data-lucide="circle-dot"></i><span id="saveStateText">有未保存修改</span></span>
@@ -28,6 +28,7 @@
     <main class="main-content">
       <nav class="workspace-nav" aria-label="积分系统页面">
         <button class="workspace-tab active" type="button" data-page="overview" aria-current="page"><i data-lucide="layout-dashboard"></i><span>总览</span></button>
+        <button class="workspace-tab" type="button" data-page="esports"><i data-lucide="trophy"></i><span>赛事竞猜</span></button>
         <button class="workspace-tab" type="button" data-page="exchange"><i data-lucide="package-check"></i><span>兑换管理</span></button>
         <button class="workspace-tab" type="button" data-page="settings"><i data-lucide="sliders-horizontal"></i><span>配置</span></button>
       </nav>
@@ -124,6 +125,76 @@
             <div><small>抽奖消耗</small><strong id="lotterySpentTotal">—</strong><span id="lotterySpentUnit">积分</span></div>
             <div><small>兑换消耗</small><strong id="exchangeSpentTotal">—</strong><span id="exchangeSpentUnit">积分</span></div>
           </div>
+        </section>
+      </section>
+
+      <section id="esportsPage" class="workspace-page" data-page-panel="esports" hidden>
+        <div class="page-heading esports-heading">
+          <div><span class="section-kicker">竞猜运营</span><h2>赛程、倍率与结算</h2><p>管理 LoL 与无畏契约比赛，同步赛果并查看全局下注。</p></div>
+          <div class="esports-heading-actions"><span id="esportsUpdatedAt" class="updated-at">等待同步</span><button id="esportsSyncButton" class="primary-button" type="button"><i data-lucide="refresh-cw"></i><span>立即同步</span></button></div>
+        </div>
+
+        <section class="metric-band esports-metrics" aria-label="赛事竞猜概览">
+          <div class="metric"><span class="metric-icon green"><i data-lucide="calendar-days"></i></span><span><small>已收录比赛</small><strong id="esportsMatchMetric">—</strong></span></div>
+          <div class="metric"><span class="metric-icon indigo"><i data-lucide="radio"></i></span><span><small>开放比赛</small><strong id="esportsOpenMetric">—</strong></span></div>
+          <div class="metric"><span class="metric-icon amber"><i data-lucide="receipt-text"></i></span><span><small>下注记录</small><strong id="esportsBetMetric">—</strong></span></div>
+          <div class="metric"><span class="metric-icon rose"><i data-lucide="coins"></i></span><span><small>待结算积分</small><strong id="esportsPendingMetric">—</strong></span></div>
+        </section>
+
+        <div class="esports-control-grid">
+          <section class="esports-card" aria-labelledby="esportsSettingsTitle">
+            <div class="esports-card-heading"><div><span class="section-kicker">数据源</span><h3 id="esportsSettingsTitle">同步设置</h3><p>Token 仅保存在 AstrBot 本地配置中。</p></div><button id="esportsSaveSettingsButton" class="compact-button accent" type="button"><i data-lucide="save"></i><span>保存设置</span></button></div>
+            <div class="esports-form-grid">
+              <label class="esports-field"><span>PandaScore Token</span><input id="esportsToken" type="password" autocomplete="off" placeholder="留空则保持现有 Token" /></label>
+              <label class="esports-field"><span>同步间隔（分钟）</span><input id="esportsSyncInterval" type="number" min="2" inputmode="numeric" /></label>
+              <label class="esports-field full"><span>关注赛事关键词</span><textarea id="esportsCompetitions" rows="4" placeholder="每行一个；以 ! 开头可排除"></textarea></label>
+            </div>
+            <div class="esports-switches">
+              <label><input id="esportsEnabled" type="checkbox" /><span>启用竞猜</span></label>
+              <label><input id="esportsSyncEnabled" type="checkbox" /><span>自动同步与结算</span></label>
+              <label><input id="esportsGameLol" type="checkbox" /><span>英雄联盟</span></label>
+              <label><input id="esportsGameValorant" type="checkbox" /><span>无畏契约</span></label>
+            </div>
+          </section>
+
+          <section class="esports-card" aria-labelledby="manualMatchTitle">
+            <div class="esports-card-heading"><div><span class="section-kicker">手动兜底</span><h3 id="manualMatchTitle">添加一场比赛</h3><p>数据源暂未收录时，可按本地时区手动创建。</p></div><button id="esportsAddMatchButton" class="compact-button" type="button"><i data-lucide="plus"></i><span>添加比赛</span></button></div>
+            <div class="esports-form-grid manual-grid">
+              <label class="esports-field"><span>游戏</span><select id="esportsNewGame"><option value="lol">英雄联盟</option><option value="valorant">无畏契约</option></select></label>
+              <label class="esports-field"><span>赛事</span><input id="esportsNewCompetition" placeholder="例如 LPL 2026" /></label>
+              <label class="esports-field"><span>队伍 A</span><input id="esportsNewTeamA" /></label>
+              <label class="esports-field"><span>队伍 B</span><input id="esportsNewTeamB" /></label>
+              <label class="esports-field full"><span>开赛时间</span><input id="esportsNewStart" type="datetime-local" /></label>
+            </div>
+          </section>
+        </div>
+
+        <section class="esports-card esports-table-card" aria-labelledby="candidateTitle">
+          <div class="esports-card-heading">
+            <div><span class="section-kicker">数据源候选</span><h3 id="candidateTitle">候选比赛</h3><p>同步到但未被关键词收录的比赛，勾选后加入竞猜。<span id="esportsCandidateSummary"></span></p></div>
+            <div class="esports-candidate-tools">
+              <label class="esports-toggle" title="显示被忽略的候选比赛"><input id="esportsCandidateDismissed" type="checkbox" /><span>显示已忽略</span></label>
+              <label class="search-box esports-search"><i data-lucide="search"></i><input id="esportsCandidateSearch" type="search" placeholder="搜索赛事或队伍" autocomplete="off" /></label>
+            </div>
+          </div>
+          <div class="esports-candidate-bar" id="esportsCandidateBar" hidden>
+            <span id="esportsCandidateSelectedLabel">已选 0 场</span>
+            <div class="esports-candidate-bar-actions">
+              <button id="esportsIncludeSelected" class="compact-button accent" type="button"><i data-lucide="plus"></i><span>加入所选</span></button>
+              <button id="esportsDismissSelected" class="compact-button" type="button"><i data-lucide="eye-off"></i><span>忽略所选</span></button>
+            </div>
+          </div>
+          <div class="esports-table-wrap"><table class="esports-table candidates-table"><thead><tr><th class="check-col"><input id="esportsCandidateAll" type="checkbox" aria-label="全选候选比赛" /></th><th>比赛</th><th>开赛时间</th><th>状态</th><th>操作</th></tr></thead><tbody id="esportsCandidateRows"></tbody></table></div>
+        </section>
+
+        <section class="esports-card esports-table-card" aria-labelledby="matchManagementTitle">
+          <div class="esports-card-heading"><div><span class="section-kicker">比赛管理</span><h3 id="matchManagementTitle">比赛与结算</h3></div><label class="search-box esports-search"><i data-lucide="search"></i><input id="esportsMatchSearch" type="search" placeholder="搜索编号、赛事或队伍" autocomplete="off" /></label></div>
+          <div class="esports-table-wrap"><table class="esports-table"><thead><tr><th>比赛</th><th>开赛时间</th><th>模型倍率 / 投注</th><th>状态</th><th>操作</th></tr></thead><tbody id="esportsMatchRows"></tbody></table></div>
+        </section>
+
+        <section class="esports-card esports-table-card" aria-labelledby="recentBetsTitle">
+          <div class="esports-card-heading"><div><span class="section-kicker">全局记录</span><h3 id="recentBetsTitle">最近下注</h3></div><span class="panel-total">最多显示 100 条</span></div>
+          <div class="esports-table-wrap"><table class="esports-table bets-table"><thead><tr><th>比赛</th><th>用户</th><th>选择</th><th>本金</th><th>倍率</th><th>状态 / 返还</th></tr></thead><tbody id="esportsBetRows"></tbody></table></div>
         </section>
       </section>
 
