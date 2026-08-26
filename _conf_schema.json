@@ -608,23 +608,10 @@
         "default": ["lol", "valorant"]
       },
       "tracked_competitions": {
-        "description": "关注赛事关键词",
+        "description": "额外缩小赛事范围",
         "type": "list",
-        "hint": "数据源的联赛、系列赛或赛事名称包含任一关键词时收录；以 ! 开头表示排除，例如 !challengers；留空表示不限制。",
-        "default": [
-          "lpl",
-          "lck",
-          "mid-season invitational",
-          "msi",
-          "world championship",
-          "worlds",
-          "vct",
-          "valorant masters",
-          "champions",
-          "!challengers",
-          "!academy",
-          "!game changers"
-        ]
+        "hint": "插件已固定只收录 LoL 的 LPL/LCK/先锋赛/MSI/全球总决赛，以及无畏契约 VCT 四大赛区/Masters/Champions。通常留空；填写后仅在这些一线赛事中进一步按关键词筛选。",
+        "default": []
       },
       "sync_interval_minutes": {
         "description": "自动同步间隔（分钟）",

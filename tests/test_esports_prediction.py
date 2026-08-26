@@ -63,7 +63,68 @@ def add_future_match(plugin, hours=3):
     )
 
 
+def track_only_lpl(plugin):
+    plugin.config["esports_prediction_settings"]["tracked_competitions"] = ["lpl"]
+
+
 class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_today_matches_are_supplemented_with_nearby_open_matches(self):
+        plugin = build_plugin()
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 26, 8, 0, tzinfo=datetime.timezone.utc
+        )
+        today_match = plugin._create_manual_match_locked(
+            "lol", "LPL", "BLG", "TES", "2026-08-26 20:00"
+        )
+        next_match = plugin._create_manual_match_locked(
+            "lol", "LCK", "GEN", "T1", "2026-08-27 20:00"
+        )
+
+        reply = await anext(plugin.esports_matches(FakeEvent("/今日赛事")))
+
+        self.assertIn(today_match["display_id"], reply)
+        self.assertIn(next_match["display_id"], reply)
+        self.assertIn("今日及近期可竞猜赛事", reply)
+
+    async def test_tier_one_allowlist_is_game_specific(self):
+        plugin = build_plugin()
+        accepted = [
+            {"game": "lol", "_filter_text": "lpl 2026 split 3 playoffs"},
+            {"game": "lol", "_filter_text": "league of legends pro league 2026"},
+            {"game": "lol", "_filter_text": "lck 2026 cup"},
+            {"game": "lol", "_filter_text": "league of legends champions korea 2026"},
+            {"game": "lol", "_filter_text": "first stand 2026"},
+            {"game": "lol", "_filter_text": "mid-season invitational 2026"},
+            {"game": "lol", "_filter_text": "2026 season world championship"},
+            {"game": "valorant", "_filter_text": "vct 2026 americas stage 2"},
+            {"game": "valorant", "_filter_text": "valorant champions tour 2026 emea kickoff"},
+            {"game": "valorant", "_filter_text": "vct 2026 pacific stage 1"},
+            {"game": "valorant", "_filter_text": "vct 2026 china stage 2"},
+            {"game": "valorant", "_filter_text": "vct 2026 masters london"},
+            {"game": "valorant", "_filter_text": "valorant champions 2026"},
+        ]
+        rejected = [
+            {"game": "lol", "_filter_text": "lck challengers league 2026"},
+            {"game": "lol", "_filter_text": "lck cl 2026 summer"},
+            {"game": "lol", "_filter_text": "lec 2026 summer"},
+            {"game": "valorant", "_filter_text": "vct challengers 2026 japan"},
+            {"game": "valorant", "_filter_text": "vct ascension 2026 pacific"},
+            {"game": "valorant", "_filter_text": "valorant game changers 2026 china"},
+        ]
+
+        self.assertTrue(all(plugin._is_tier_one_match(match) for match in accepted))
+        self.assertFalse(any(plugin._is_tier_one_match(match) for match in rejected))
+
+    async def test_legacy_default_keywords_migrate_to_full_tier_one_allowlist(self):
+        plugin = build_plugin()
+        plugin.config["esports_prediction_settings"]["tracked_competitions"] = list(
+            esports_feature.LEGACY_DEFAULT_TRACKED_COMPETITIONS
+        )
+
+        settings = plugin._get_esports_settings()
+
+        self.assertEqual(settings["tracked_competitions"], [])
+
     async def test_match_display_and_bet_prefer_official_team_code(self):
         plugin = build_plugin()
         match = add_future_match(plugin)
@@ -217,7 +278,7 @@ class FakeSyncProvider:
                         {"id": 401, "name": "Ended Alpha", "acronym": "EA"},
                         {"id": 402, "name": "Ended Beta", "acronym": "EB"},
                     ],
-                    "league": {"name": "LJL", "slug": "ljl"},
+                    "league": {"name": "LCK", "slug": "lck"},
                     "serie": {"name": "Summer 2026"},
                 }
             ]
@@ -237,7 +298,7 @@ class FakeSyncProvider:
                 "status": "not_started",
                 "begin_at": "2026-08-28T13:00:00Z",
                 "opponents": [{"id": 201, "name": "Gamma"}, {"id": 202, "name": "Delta"}],
-                "league": {"name": "LJL", "slug": "ljl"},
+                "league": {"name": "LCK", "slug": "lck"},
                 "serie": {"name": "Summer 2026"},
             },
             {
@@ -254,6 +315,7 @@ class FakeSyncProvider:
 class EsportsCandidateSyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_sync_does_not_add_already_finished_match_to_candidates(self):
         plugin = build_plugin()
+        track_only_lpl(plugin)
         original = esports_feature.PandaScoreProvider
         esports_feature.PandaScoreProvider = FakeSyncProvider
         try:
@@ -267,6 +329,7 @@ class EsportsCandidateSyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sync_routes_untracked_matches_to_candidates(self):
         plugin = build_plugin()
+        track_only_lpl(plugin)
         original = esports_feature.PandaScoreProvider
         esports_feature.PandaScoreProvider = FakeSyncProvider
         try:
@@ -278,12 +341,14 @@ class EsportsCandidateSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("pandascore:lol:555001", store["matches"])
         self.assertNotIn("pandascore:lol:555002", store["matches"])
         self.assertIn("pandascore:lol:555002", store["candidates"])
-        self.assertIn("pandascore:lol:555003", store["candidates"])
+        self.assertNotIn("pandascore:lol:555003", store["candidates"])
         self.assertFalse(store["candidates"]["pandascore:lol:555002"]["dismissed"])
-        self.assertEqual(result["candidates"], 2)
+        self.assertEqual(result["candidates"], 1)
+        self.assertEqual(result["ignored"], 1)
 
     async def test_sync_keeps_dismissed_flag_on_candidates(self):
         plugin = build_plugin()
+        track_only_lpl(plugin)
         store = plugin._get_esports_store()
         store["candidates"]["pandascore:lol:555002"] = {
             "id": "pandascore:lol:555002",
@@ -291,7 +356,7 @@ class EsportsCandidateSyncTests(unittest.IsolatedAsyncioTestCase):
             "source": "pandascore",
             "source_id": "555002",
             "game": "lol",
-            "competition": "LJL 2026 Summer",
+            "competition": "LCK 2026 Summer",
             "stage": "",
             "name": "Gamma vs Delta",
             "start_time": "2026-08-28T13:00:00Z",
@@ -331,7 +396,7 @@ class EsportsCandidateSyncTests(unittest.IsolatedAsyncioTestCase):
             "source": "pandascore",
             "source_id": "555002",
             "game": "lol",
-            "competition": "LJL 2026 Summer",
+            "competition": "LCK 2026 Summer",
             "stage": "",
             "name": "Gamma vs Delta",
             "start_time": "2026-08-28T13:00:00Z",
@@ -374,7 +439,7 @@ class EsportsCandidateSyncTests(unittest.IsolatedAsyncioTestCase):
             "source": "pandascore",
             "source_id": "424242",
             "game": "lol",
-            "competition": "LJL 2026 Summer",
+            "competition": "LCK 2026 Summer",
             "stage": "",
             "name": "Old vs Older",
             "start_time": stale_start,

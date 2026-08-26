@@ -147,7 +147,7 @@
             <div class="esports-form-grid">
               <label class="esports-field"><span>PandaScore Token</span><input id="esportsToken" type="password" autocomplete="off" placeholder="留空则保持现有 Token" /></label>
               <label class="esports-field"><span>同步间隔（分钟）</span><input id="esportsSyncInterval" type="number" min="2" inputmode="numeric" /></label>
-              <label class="esports-field full"><span>关注赛事关键词</span><textarea id="esportsCompetitions" rows="4" placeholder="每行一个；以 ! 开头可排除"></textarea></label>
+              <label class="esports-field full"><span>额外缩小赛事范围（可选）</span><textarea id="esportsCompetitions" rows="4" placeholder="通常留空；需要缩小时每行一个关键词"></textarea><small>默认仅收录 LoL：LPL、LCK、先锋赛、MSI、全球总决赛；无畏契约：VCT 四大赛区、Masters、Champions。</small></label>
             </div>
             <div class="esports-switches">
               <label><input id="esportsEnabled" type="checkbox" /><span>启用竞猜</span></label>
@@ -171,7 +171,7 @@
 
         <section class="esports-card esports-table-card" aria-labelledby="candidateTitle">
           <div class="esports-card-heading">
-            <div><span class="section-kicker">数据源候选</span><h3 id="candidateTitle">候选比赛</h3><p>同步到但未被关键词收录的比赛，勾选后加入竞猜。<span id="esportsCandidateSummary"></span></p></div>
+            <div><span class="section-kicker">数据源候选</span><h3 id="candidateTitle">候选比赛</h3><p>符合一线赛事白名单、但未命中自定义关键词的比赛，可勾选加入竞猜。<span id="esportsCandidateSummary"></span></p></div>
             <div class="esports-candidate-tools">
               <label class="esports-toggle" title="显示被忽略的候选比赛"><input id="esportsCandidateDismissed" type="checkbox" /><span>显示已忽略</span></label>
               <label class="search-box esports-search"><i data-lucide="search"></i><input id="esportsCandidateSearch" type="search" placeholder="搜索赛事或队伍" autocomplete="off" /></label>

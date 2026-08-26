@@ -43,7 +43,7 @@ def add_candidate(plugin, match_id="pandascore:lol:9001", dismissed=False):
         "source": "pandascore",
         "source_id": match_id.rsplit(":", 1)[-1],
         "game": "lol",
-        "competition": "LJL 2026 Summer",
+        "competition": "LCK 2026 Summer",
         "stage": "",
         "name": "Alpha vs Beta",
         "start_time": "2026-08-28T12:00:00Z",
