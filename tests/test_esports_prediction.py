@@ -64,6 +64,31 @@ def add_future_match(plugin, hours=3):
 
 
 class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_match_display_and_bet_prefer_official_team_code(self):
+        plugin = build_plugin()
+        match = add_future_match(plugin)
+        match["teams"][0]["name"] = "Top Esports"
+        match["teams"][0]["code"] = "TES"
+        match["teams"][1]["name"] = "Bilibili Gaming"
+        match["teams"][1]["code"] = "BLG"
+
+        line = plugin._format_match_line_locked(match)
+        self.assertIn("TES", line)
+        self.assertIn("BLG", line)
+        self.assertNotIn("Top Esports", line)
+        self.assertIs(plugin._resolve_match_team(match, "TES"), match["teams"][0])
+        self.assertIs(
+            plugin._resolve_match_team(match, "Top Esports"), match["teams"][0]
+        )
+
+        reply = await anext(
+            plugin.esports_bet(FakeEvent(f"/竞猜 {match['display_id']} TES 100"))
+        )
+        bet = next(iter(plugin.data["esports"]["bets"].values()))
+        self.assertEqual(bet["team_name"], "TES")
+        self.assertIn("｜TES｜", reply)
+        self.assertNotIn("Top Esports", reply)
+
     async def test_same_user_bet_is_merged_across_groups(self):
         plugin = build_plugin()
         match = add_future_match(plugin)
@@ -179,7 +204,24 @@ class FakeSyncProvider:
         pass
 
     async def fetch_matches(self, game, state, **kwargs):
-        if game != "lol" or state != "upcoming":
+        if game != "lol":
+            return []
+        if state == "past":
+            return [
+                {
+                    "id": 555004,
+                    "status": "finished",
+                    "begin_at": "2026-08-25T12:00:00Z",
+                    "winner_id": 401,
+                    "opponents": [
+                        {"id": 401, "name": "Ended Alpha", "acronym": "EA"},
+                        {"id": 402, "name": "Ended Beta", "acronym": "EB"},
+                    ],
+                    "league": {"name": "LJL", "slug": "ljl"},
+                    "serie": {"name": "Summer 2026"},
+                }
+            ]
+        if state != "upcoming":
             return []
         return [
             {
@@ -210,6 +252,19 @@ class FakeSyncProvider:
 
 
 class EsportsCandidateSyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sync_does_not_add_already_finished_match_to_candidates(self):
+        plugin = build_plugin()
+        original = esports_feature.PandaScoreProvider
+        esports_feature.PandaScoreProvider = FakeSyncProvider
+        try:
+            await plugin._sync_esports_once("测试")
+        finally:
+            esports_feature.PandaScoreProvider = original
+
+        store = plugin._get_esports_store()
+        self.assertNotIn("pandascore:lol:555004", store["matches"])
+        self.assertNotIn("pandascore:lol:555004", store["candidates"])
+
     async def test_sync_routes_untracked_matches_to_candidates(self):
         plugin = build_plugin()
         original = esports_feature.PandaScoreProvider
