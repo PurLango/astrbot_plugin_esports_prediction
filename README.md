@@ -1,12 +1,14 @@
-# 群积分助手 (astrbot_plugin_point_system)
+# 赛事积分竞猜 (astrbot_plugin_point_system)
 
 ## 插件简介
-`astrbot_plugin_point_system` 是一个面向 AstrBot 群聊场景的积分互动插件，围绕“签到、活跃、抽奖、兑换、管理”这几类高频玩法设计。它支持按群维护成员信息、自动保存数据、定时备份、日期口令奖励，以及负分限制和群头衔联动，适合做群活跃体系或轻量积分经济。
+`astrbot_plugin_point_system` 是一个面向 AstrBot 群聊的电竞赛事竞猜与积分互动插件。它支持 LoL、VALORANT 热门赛程同步、动态倍率、积分下注、赛后自动结算，并保留签到、活跃、抽奖、兑换和积分管理能力。
 
-**版本：2.3.1**
+本项目基于 [menglimi/astrbot_plugin_point_system](https://github.com/menglimi/astrbot_plugin_point_system) 扩展开发，保留原插件标识以兼容已有积分数据。
 
-**展示名称：** `群积分助手`  
-**GitHub 仓库：** [https://github.com/menglimi/astrbot_plugin_point_system](https://github.com/menglimi/astrbot_plugin_point_system)
+**版本：2.4.0**
+
+**展示名称：** `赛事积分竞猜`
+**GitHub 仓库：** [https://github.com/PurLango/astrbot_plugin_esports_prediction](https://github.com/PurLango/astrbot_plugin_esports_prediction)
 
 ---
 
@@ -34,7 +36,7 @@
 5. 抽奖、生日、日期口令和平台专属兑换均可之后逐项调整
 
 ### 5 分钟跑通第一个兑换物
-管理员操作路径：`AstrBot 管理面板 → 插件 → 群积分助手 → 兑换管理`。点击“新增兑换物”，填写后保存即可。也可以在普通插件配置页编辑 `exchange_items`。
+管理员操作路径：`AstrBot 管理面板 → 插件 → 赛事积分竞猜 → 兑换管理`。点击“新增兑换物”，填写后保存即可。也可以在普通插件配置页编辑 `exchange_items`。
 
 最小示例（示例名称和内容都可以替换）：
 
@@ -88,6 +90,7 @@
 - 生日系统：支持记录生日、生日签到奖励，以及按配置时间自动播报当日寿星名单
 - 自动备份：支持多备份目标和每日定时备份
 - 负分联动：负分用户仅可签到恢复积分，不能抽奖，并自动同步 `群女仆X号` 头衔
+- 电竞竞猜：支持英雄联盟与无畏契约胜者竞猜、跨群合并下注、Elo 模型倍率、自动结算与异常退款
 
 ---
 
@@ -155,6 +158,14 @@
 | `/抢红包 编号 [口令]` | 按编号精确领取，兼容多个红包同时存在 | `/抢红包 A1B2C3D4 春日快乐` |
 | `/记录生日 10/24` | 记录自己的生日 | `/记录生日 10/24` |
 | `/生日签到` | 领取年度生日祝福与生日奖励；未记录时可按配置自动记录为今天 | `/生日签到` |
+| `/今日赛事` | 查看今日或近期已收录赛事及模型倍率 | `/今日赛事` |
+| `/赛事详情 编号` | 查看比赛胜率、倍率、奖池与封盘时间 | `/赛事详情 L1234567` |
+| `/竞猜 编号 队伍 积分` | 竞猜胜者；同队再次下注会合并追加 | `/竞猜 L1234567 1 100` |
+| `/改选 编号 队伍` | 在开赛一小时前更换所选队伍 | `/改选 L1234567 2` |
+| `/撤销竞猜 编号` | 在开赛一小时前撤单并退还全部本金 | `/撤销竞猜 L1234567` |
+| `/我的竞猜` | 查看自己的最近竞猜记录 | `/我的竞猜` |
+| `/竞猜排行` | 查看盈利、命中率和总返还榜 | `/竞猜排行` |
+| `/竞猜规则` | 查看下注、改选、封盘和退款规则 | `/竞猜规则` |
 
 ### 无前缀口令
 签到和抽奖关键词都可在配置中单独修改。
@@ -176,6 +187,11 @@
 | `/积分红包 拼手气 100 5` | 创建总额 100、共 5 份的拼手气红包 | `/积分红包 拼手气 100 5` |
 | `/积分红包 口令 100 5 春日快乐` | 创建需要口令的红包 | `/积分红包 口令 100 5 春日快乐` |
 | `/清空所有数据 确认` | 清空全部积分、抽奖、红包、生日与群记录 | `/清空所有数据 确认` |
+| `/竞猜管理 同步` | 立即从 PandaScore 同步赛程、赛果并自动结算 | `/竞猜管理 同步` |
+| `/竞猜管理 添加 游戏\|赛事\|队伍A\|队伍B\|时间` | 手动添加一场比赛；时间按配置时区解释 | `/竞猜管理 添加 lol\|LPL\|BLG\|TES\|2026-09-01 19:00` |
+| `/竞猜管理 结算 编号 队伍` | 手动指定获胜队伍并结算 | `/竞猜管理 结算 L1234567 1` |
+| `/竞猜管理 退款 编号` | 将该场全部未结算下注原额退回 | `/竞猜管理 退款 L1234567` |
+| `/竞猜管理 封盘 编号` | 立即停止新下注 | `/竞猜管理 封盘 L1234567` |
 
 管理员权限由 `admin_settings.points_admin_ids` 控制，只有配置过的 QQ 号可以增减积分或创建红包。红包由系统发放，不扣管理员个人积分。
 
@@ -189,6 +205,22 @@
 - `message_templates.*`：消息模板配置
 - `leaderboard_settings.display_limit`：排行榜显示数量
 - `leaderboard_settings.show_self_rank`：是否显示自己的名次
+
+### 电竞竞猜配置
+- `esports_prediction_settings.pandascore_token`：PandaScore 账户 Token；未配置时不会自动联网，但手动管理仍可使用
+- `games`：自动同步 `lol`、`valorant` 中的哪些游戏
+- `tracked_competitions`：赛事筛选关键词；默认覆盖 LPL、LCK、MSI、全球总决赛和 VCT；以 `!` 开头可排除次级赛事，例如 `!challengers`
+- `sync_interval_minutes`：自动同步间隔，默认 10 分钟
+- `min_bet` / `max_bet`：每人每场最低和累计最高下注，默认 `10` / `10000`
+- `switch_deadline_minutes`：改选和撤单截止，默认开赛前 60 分钟
+- `close_before_minutes`：停止新下注，默认开赛前 30 分钟
+- `elo_k_factor`：历史赛果更新实力评分的速度，默认 `32`
+- `odds_margin`：模型倍率边际，默认 `0.05`
+- `timezone_offset_hours`：赛事显示和手动录入使用的时区，默认 `UTC+8`
+
+竞猜比赛和下注是 Bot 全局数据：同一用户从两个群操作同一比赛时会读取和修改同一笔下注。第一笔下注后，该场双方倍率锁定。PandaScore 同步只读取赛程、比赛状态和赛果；倍率由插件根据已同步历史赛果运行 Elo 模型得出。
+
+管理员也可以在 `AstrBot 管理面板 → 插件 → 赛事积分竞猜 → 竞猜管理` 中配置 Token、手动添加比赛、同步、封盘、隐藏、退款和结算。
 
 ### 签到配置
 - `sign_in_settings.sign_in_mode`：`random` 或 `fixed`
@@ -256,7 +288,7 @@
 - `exchange_settings.allow_mute_others`
 
 ### 兑换管理拓展页
-- 入口为 `AstrBot 管理面板 → 插件 → 群积分助手 → 兑换管理`
+- 入口为 `AstrBot 管理面板 → 插件 → 赛事积分竞猜 → 兑换管理`
 - “总览”支持按群号搜索并切换群聊，核心指标、排行、分布和趋势会同步按群成员重算
 - 总积分折线支持最近 24 小时、7 天和 30 天；真实快照从 2.3.0 启用后开始采集，不会伪造升级前的历史
 - 新增兑换物后依次填写名称、所需积分和发放内容；发放内容支持每行一份批量粘贴，最后点击保存
@@ -318,14 +350,22 @@
 ## 开发验证
 发布前建议至少完成以下检查：
 
-- 编译检查：`python -m py_compile main.py page_api.py birthday_feature.py lottery_feature.py`
-- 页面脚本检查：`node --check pages/兑换管理/app.js`
+- 编译检查：`python -m py_compile main.py page_api.py birthday_feature.py lottery_feature.py esports_feature.py esports_provider.py esports_page_api.py`
+- 页面脚本检查：`node --check pages/兑换管理/app.js` 和 `node --check pages/竞猜管理/app.js`
 - `_conf_schema.json` JSON 解析与全部文本文件 UTF-8 编码检查
-- 兑换命令、配置保存冲突、桌面与移动端页面回归
+- 单元测试：`python -m unittest discover -s tests -t . -v`
+- 兑换命令、竞猜结算、配置保存冲突、桌面与移动端页面回归
 
 ---
 
 ## 更新记录
+
+### 2.4.0
+- 新增英雄联盟与无畏契约胜者竞猜，支持跨群唯一下注、同队追加、改选和撤单
+- 新增 PandaScore 赛程/赛果同步、自动结算与异常比赛全额退款
+- 新增基于历史赛果的 Elo 实力评分和模型倍率；首笔下注后锁定倍率
+- 新增盈利、命中率和总返还排行榜，以及竞猜管理指令和管理拓展页
+- 竞猜数据并入现有原子保存与自动备份流程，旧积分数据自动迁移
 
 ### 2.3.1
 - 兼容命令末尾附加的 `[MSG_ID:数字]` 消息标记，修复 AstrBot 4.23.6 环境下 `/给积分` 与 `/兑换` 参数解析失败的问题
@@ -432,10 +472,10 @@
 ---
 
 ## 开发信息
-1. 开发者：`menglimi`
+1. 原插件开发者：`menglimi`；本仓库维护者：`PurLango`
 2. 插件标识：`astrbot_plugin_point_system`
-3. 展示名称：`群积分助手`
-4. 仓库地址：[https://github.com/menglimi/astrbot_plugin_point_system](https://github.com/menglimi/astrbot_plugin_point_system)
+3. 展示名称：`赛事积分竞猜`
+4. 仓库地址：[https://github.com/PurLango/astrbot_plugin_esports_prediction](https://github.com/PurLango/astrbot_plugin_esports_prediction)
 5. 数据目录：`<AstrBot数据目录>\plugin_data\astrbot_plugin_point_system`
 6. 最低 AstrBot 版本：`4.22.0`
 

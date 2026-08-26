@@ -573,6 +573,131 @@
       }
     }
   },
+  "esports_prediction_settings": {
+    "description": "电竞赛事竞猜设置",
+    "type": "object",
+    "hint": "支持英雄联盟和无畏契约胜者竞猜。赛事和下注在所有群之间共享，同一用户对同一场比赛只有一笔可追加的下注。",
+    "items": {
+      "enabled": {
+        "description": "启用电竞竞猜",
+        "type": "bool",
+        "default": true
+      },
+      "sync_enabled": {
+        "description": "启用赛事自动同步与结算",
+        "type": "bool",
+        "hint": "配置有效的 PandaScore Token 后生效；关闭后仍可由管理员手动添加、结算和退款。",
+        "default": true
+      },
+      "provider": {
+        "description": "赛事数据源",
+        "type": "string",
+        "hint": "首版支持 pandascore。",
+        "default": "pandascore"
+      },
+      "pandascore_token": {
+        "description": "PandaScore API Token",
+        "type": "string",
+        "hint": "在 PandaScore 账户中申请并复制 Token。Token 只保存在 AstrBot 本地配置中，请勿发送到群聊或提交到仓库。",
+        "default": ""
+      },
+      "games": {
+        "description": "同步的游戏",
+        "type": "list",
+        "hint": "可填写 lol 和 valorant。",
+        "default": ["lol", "valorant"]
+      },
+      "tracked_competitions": {
+        "description": "关注赛事关键词",
+        "type": "list",
+        "hint": "数据源的联赛、系列赛或赛事名称包含任一关键词时收录；以 ! 开头表示排除，例如 !challengers；留空表示不限制。",
+        "default": [
+          "lpl",
+          "lck",
+          "mid-season invitational",
+          "msi",
+          "world championship",
+          "worlds",
+          "vct",
+          "valorant masters",
+          "champions",
+          "!challengers",
+          "!academy",
+          "!game changers"
+        ]
+      },
+      "sync_interval_minutes": {
+        "description": "自动同步间隔（分钟）",
+        "type": "int",
+        "hint": "最短按 2 分钟处理，推荐 10 分钟。",
+        "default": 10
+      },
+      "request_timeout_seconds": {
+        "description": "数据源请求超时（秒）",
+        "type": "int",
+        "default": 20
+      },
+      "min_bet": {
+        "description": "单场最低下注积分",
+        "type": "int",
+        "default": 10
+      },
+      "max_bet": {
+        "description": "每人每场累计最高下注积分",
+        "type": "int",
+        "default": 10000
+      },
+      "switch_deadline_minutes": {
+        "description": "开赛前停止改选与撤单（分钟）",
+        "type": "int",
+        "default": 60
+      },
+      "close_before_minutes": {
+        "description": "开赛前封盘（分钟）",
+        "type": "int",
+        "default": 30
+      },
+      "elo_k_factor": {
+        "description": "Elo 评分更新强度",
+        "type": "float",
+        "hint": "数值越大，最近赛果对实力评分影响越明显。推荐保持 32。",
+        "default": 32.0
+      },
+      "odds_margin": {
+        "description": "模型倍率边际",
+        "type": "float",
+        "hint": "默认 0.05。提高会整体降低返还倍率，允许范围由插件限制为 0～0.3。",
+        "default": 0.05
+      },
+      "min_probability": {
+        "description": "模型最低胜率",
+        "type": "float",
+        "hint": "避免历史样本不足时产生极端倍率，默认 0.08。",
+        "default": 0.08
+      },
+      "max_odds": {
+        "description": "最高返还倍率",
+        "type": "float",
+        "default": 10.0
+      },
+      "timezone_offset_hours": {
+        "description": "显示时区 UTC 偏移",
+        "type": "int",
+        "hint": "北京时间填写 8。手动添加比赛时也按该时区解释。",
+        "default": 8
+      },
+      "leaderboard_limit": {
+        "description": "竞猜排行榜显示人数",
+        "type": "int",
+        "default": 10
+      },
+      "hit_rate_min_bets": {
+        "description": "进入命中率榜的最低已结算场数",
+        "type": "int",
+        "default": 3
+      }
+    }
+  },
   "admin_settings": {
     "description": "管理相关设置",
     "type": "object",

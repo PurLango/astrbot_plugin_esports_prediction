@@ -23,13 +23,15 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 
 try:
     from .birthday_feature import BirthdayFeatureMixin
+    from .esports_feature import EsportsPredictionMixin
     from .lottery_feature import LotteryFeatureMixin
 except ImportError:
     from birthday_feature import BirthdayFeatureMixin
+    from esports_feature import EsportsPredictionMixin
     from lottery_feature import LotteryFeatureMixin
 
 PLUGIN_NAME = "astrbot_plugin_point_system"
-DATA_VERSION = 11
+DATA_VERSION = 12
 POINT_SNAPSHOT_BUCKET_MINUTES = 15
 POINT_SNAPSHOT_RETENTION_DAYS = 90
 POINT_SNAPSHOT_MAX_RECORDS = 10000
@@ -89,6 +91,19 @@ REGISTERED_COMMAND_NAMES = (
     "领红包",
     "红包",
     "抽奖",
+    "今日赛事",
+    "赛事列表",
+    "热门赛事",
+    "赛事详情",
+    "竞猜",
+    "改选",
+    "撤销竞猜",
+    "撤单",
+    "我的竞猜",
+    "竞猜记录",
+    "竞猜排行",
+    "竞猜规则",
+    "竞猜管理",
 )
 REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     sorted(REGISTERED_COMMAND_NAMES, key=len, reverse=True)
@@ -98,11 +113,13 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
 @register(
     PLUGIN_NAME,
     "menglimi",
-    "astrbot_plugin_point_system 是一个面向 AstrBot 群聊场景的积分互动插件，围绕“签到、活跃、抽奖、兑换、管理”这几类高频玩法设计。它支持按群维护成员信息、自动保存数据、定时备份、日期口令奖励，以及负分限制和群头衔联动，适合做群活跃体系或轻量积分经济。",
-    "2.3.1",
-    "https://github.com/menglimi/astrbot_plugin_point_system",
+    "赛事积分竞猜是一个面向 AstrBot 群聊的电竞赛事竞猜与积分互动插件，支持 LoL、VALORANT 赛程同步、动态倍率、积分下注、自动结算，以及签到、抽奖和兑换等积分功能。",
+    "2.4.0",
+    "https://github.com/PurLango/astrbot_plugin_esports_prediction",
 )
-class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
+class PointSystemPlugin(
+    BirthdayFeatureMixin, LotteryFeatureMixin, EsportsPredictionMixin, Star
+):
     def __init__(self, context: Context, config: Dict[str, Any]):
         super().__init__(context)
         self.config = config
@@ -111,7 +128,10 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         self._backup_stop_event = asyncio.Event()
         self._birthday_broadcast_task: asyncio.Task | None = None
         self._birthday_broadcast_stop_event = asyncio.Event()
+        self._esports_sync_task: asyncio.Task | None = None
+        self._esports_stop_event = asyncio.Event()
         self.page_api = None
+        self.esports_page_api = None
 
         self.data_dir = StarTools.get_data_dir(PLUGIN_NAME)
         self.data_file = os.path.join(self.data_dir, "points_data.json")
@@ -132,6 +152,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             self._birthday_broadcast_task = loop.create_task(
                 self._birthday_broadcast_loop()
             )
+            self._esports_sync_task = loop.create_task(self._esports_sync_loop())
 
     def _register_page_api(self) -> None:
         if not callable(getattr(self.context, "register_web_api", None)):
@@ -146,6 +167,18 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             self.page_api = None
             logger.warning(f"[PointSystem] 拓展页 API 注册失败: {exc}")
 
+        try:
+            try:
+                from .esports_page_api import EsportsPredictionPageApi
+            except ImportError:
+                from esports_page_api import EsportsPredictionPageApi
+
+            self.esports_page_api = EsportsPredictionPageApi(self)
+            self.esports_page_api.register_routes()
+        except Exception as exc:
+            self.esports_page_api = None
+            logger.warning(f"[PointSystem] 竞猜管理页 API 注册失败: {exc}")
+
     def _new_store(self) -> Dict[str, Any]:
         return {
             "version": DATA_VERSION,
@@ -155,6 +188,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             "private_message_targets": {},
             "red_packets": [],
             "point_snapshots": [],
+            "esports": self._new_esports_store(),
             "reset_generation": 0,
         }
 
@@ -1182,6 +1216,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             store["point_snapshots"] = self._normalize_point_snapshots(
                 raw.get("point_snapshots", [])
             )
+            store["esports"] = self._normalize_esports_store(raw.get("esports", {}))
             store["reset_generation"] = self._normalize_int(
                 raw.get("reset_generation"), 0, minimum=0
             )
@@ -2894,6 +2929,60 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         async for result in BirthdayFeatureMixin.record_birthday(self, event):
             yield result
 
+    @filter.command("今日赛事", alias={"赛事列表", "热门赛事"})
+    async def esports_matches_command(self, event: AstrMessageEvent):
+        """查看今天或近期已收录的电竞比赛。"""
+        async for result in EsportsPredictionMixin.esports_matches(self, event):
+            yield result
+
+    @filter.command("赛事详情")
+    async def esports_match_detail_command(self, event: AstrMessageEvent):
+        """查看比赛、模型倍率与封盘时间。"""
+        async for result in EsportsPredictionMixin.esports_match_detail(self, event):
+            yield result
+
+    @filter.command("竞猜")
+    async def esports_bet_command(self, event: AstrMessageEvent):
+        """使用积分竞猜一场比赛的胜者。"""
+        async for result in EsportsPredictionMixin.esports_bet(self, event):
+            yield result
+
+    @filter.command("改选")
+    async def esports_switch_bet_command(self, event: AstrMessageEvent):
+        """在改选截止前更换所选队伍。"""
+        async for result in EsportsPredictionMixin.esports_switch_bet(self, event):
+            yield result
+
+    @filter.command("撤销竞猜", alias={"撤单"})
+    async def esports_cancel_bet_command(self, event: AstrMessageEvent):
+        """在撤单截止前撤销竞猜并退还积分。"""
+        async for result in EsportsPredictionMixin.esports_cancel_bet(self, event):
+            yield result
+
+    @filter.command("我的竞猜", alias={"竞猜记录"})
+    async def esports_my_bets_command(self, event: AstrMessageEvent):
+        """查看自己的竞猜记录。"""
+        async for result in EsportsPredictionMixin.esports_my_bets(self, event):
+            yield result
+
+    @filter.command("竞猜排行")
+    async def esports_leaderboard_command(self, event: AstrMessageEvent):
+        """查看盈利、命中率与总返还排行榜。"""
+        async for result in EsportsPredictionMixin.esports_leaderboard(self, event):
+            yield result
+
+    @filter.command("竞猜规则")
+    async def esports_rules_command(self, event: AstrMessageEvent):
+        """查看电竞竞猜规则。"""
+        async for result in EsportsPredictionMixin.esports_rules(self, event):
+            yield result
+
+    @filter.command("竞猜管理")
+    async def esports_admin_command(self, event: AstrMessageEvent):
+        """同步、添加、封盘、退款或结算比赛。"""
+        async for result in EsportsPredictionMixin.esports_admin(self, event):
+            yield result
+
     @filter.command("我的积分")
     async def query_points(self, event: AstrMessageEvent):
         """查询自己当前拥有的积分总额。"""
@@ -3274,7 +3363,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
                 return
             yield self._plain_result(
                 event,
-                "当前还没有已上架的兑换物。管理员可在“插件 → 群积分助手 → "
+                "当前还没有已上架的兑换物。管理员可在“插件 → 赛事积分竞猜 → "
                 "兑换管理”中创建并启用兑换物。",
             )
             return
@@ -3345,7 +3434,7 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
                 yield self._plain_result(
                     event,
                     "当前还没有已上架的兑换物，请稍后再试。管理员可在“插件 → "
-                    "群积分助手 → 兑换管理”中添加。",
+                    "赛事积分竞猜 → 兑换管理”中添加。",
                 )
             return
 
@@ -4060,8 +4149,11 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
         """插件卸载时保存一次数据"""
         if self.page_api is not None:
             self.page_api.unregister_routes()
+        if self.esports_page_api is not None:
+            self.esports_page_api.unregister_routes()
         self._backup_stop_event.set()
         self._birthday_broadcast_stop_event.set()
+        self._esports_stop_event.set()
         if self._backup_task is not None:
             self._backup_task.cancel()
             try:
@@ -4072,6 +4164,12 @@ class PointSystemPlugin(BirthdayFeatureMixin, LotteryFeatureMixin, Star):
             self._birthday_broadcast_task.cancel()
             try:
                 await self._birthday_broadcast_task
+            except asyncio.CancelledError:
+                pass
+        if self._esports_sync_task is not None:
+            self._esports_sync_task.cancel()
+            try:
+                await self._esports_sync_task
             except asyncio.CancelledError:
                 pass
 
