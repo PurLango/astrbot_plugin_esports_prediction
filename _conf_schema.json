@@ -1,4 +1,4 @@
-{
+{
   "points_name": {
     "description": "积分自定义名称",
     "type": "string",
@@ -50,7 +50,7 @@
         "type": "int",
         "hint": "每日签到随机获得的最小积分数额。",
         "default": 10
-      },
+      },
       "max_sign_in_points": {
         "description": "签到获得积分上限",
         "type": "int",
@@ -533,21 +533,21 @@
   "leaderboard_settings": {
     "description": "排行榜设置",
     "type": "object",
-    "items": {
-      "display_limit": {
-        "description": "排行榜显示人数",
-        "type": "int",
-        "hint": "执行 /积分榜 时展示的用户数量。",
-        "default": 10
-      },
-      "show_self_rank": {
-        "description": "是否在榜单下方显示自己的排名",
-        "type": "bool",
-        "hint": "如果开启，用户在查看排行榜时能看到自己当前的位次。",
-        "default": true
-      }
-    }
-  },
+    "items": {
+      "display_limit": {
+        "description": "排行榜显示人数",
+        "type": "int",
+        "hint": "执行 /积分榜 时展示的用户数量。",
+        "default": 10
+      },
+      "show_self_rank": {
+        "description": "是否在榜单下方显示自己的排名",
+        "type": "bool",
+        "hint": "如果开启，用户在查看排行榜时能看到自己当前的位次。",
+        "default": true
+      }
+    }
+  },
   "message_templates": {
     "description": "自定义回复消息模板",
     "type": "object",
@@ -682,12 +682,12 @@
     "description": "管理相关设置",
     "type": "object",
     "items": {
-      "log_operations": {
-        "description": "记录管理员操作日志",
-        "type": "bool",
-        "hint": "是否在后台日志中记录管理员加减积分的行为。",
-        "default": true
-      },
+      "log_operations": {
+        "description": "记录管理员操作日志",
+        "type": "bool",
+        "hint": "是否在后台日志中记录管理员加减积分的行为。",
+        "default": true
+      },
       "max_admin_give": {
         "description": "单次手动增减积分上限",
         "type": "int",
