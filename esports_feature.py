@@ -17,21 +17,6 @@ except ImportError:
     from esports_provider import EsportsProviderError, PandaScoreProvider
 
 
-LEGACY_DEFAULT_TRACKED_COMPETITIONS = [
-    "lpl",
-    "lck",
-    "mid-season invitational",
-    "msi",
-    "world championship",
-    "worlds",
-    "vct",
-    "valorant masters",
-    "champions",
-    "!challengers",
-    "!academy",
-    "!game changers",
-]
-DEFAULT_TRACKED_COMPETITIONS: list[str] = []
 TIER_ONE_EXCLUSIONS = {
     "lol": (
         "academy",
@@ -52,21 +37,14 @@ TIER_ONE_EXCLUSIONS = {
 FINISHED_BET_STATUSES = {"won", "lost", "refunded"}
 OPEN_MATCH_STATUSES = {"not_started", "running"}
 REFUND_MATCH_STATUSES = {"canceled", "cancelled", "postponed", "abandoned"}
-CANDIDATE_TERMINAL_STATUSES = REFUND_MATCH_STATUSES | {
-    "finished",
-    "settled",
-    "refunded",
-    "closed",
-}
-# 未被关键词收录的比赛会进入候选列表，开赛超过该天数后自动清理
-CANDIDATE_MAX_AGE_DAYS = 3
+TERMINAL_MATCH_STATUSES = REFUND_MATCH_STATUSES | {"finished", "settled", "refunded"}
+MATCH_RESULT_RETENTION_HOURS = 24
 
 
 class EsportsPredictionMixin:
     def _new_esports_store(self) -> Dict[str, Any]:
         return {
             "matches": {},
-            "candidates": {},
             "bets": {},
             "ratings": {},
             "rating_processed_match_ids": [],
@@ -91,26 +69,6 @@ class EsportsPredictionMixin:
                 normalized = self._normalize_esports_match_record(raw_match, raw_id)
                 if normalized:
                     store["matches"][normalized["id"]] = normalized
-
-        raw_candidates = raw.get("candidates", {})
-        if isinstance(raw_candidates, dict):
-            for raw_id, raw_candidate in raw_candidates.items():
-                if not isinstance(raw_candidate, dict):
-                    continue
-                normalized = self._normalize_esports_match_record(raw_candidate, raw_id)
-                if (
-                    normalized
-                    and normalized["id"] not in store["matches"]
-                    and normalized["status"] not in CANDIDATE_TERMINAL_STATUSES
-                    and self._is_tier_one_match(normalized)
-                ):
-                    store["candidates"][normalized["id"]] = {
-                        **normalized,
-                        "dismissed": bool(raw_candidate.get("dismissed", False)),
-                        "first_seen_at": str(
-                            raw_candidate.get("first_seen_at", "") or ""
-                        ).strip()[:40],
-                    }
 
         raw_bets = raw.get("bets", {})
         if isinstance(raw_bets, dict):
@@ -204,6 +162,7 @@ class EsportsPredictionMixin:
             "stage": str(raw_match.get("stage", "") or "").strip()[:120],
             "name": str(raw_match.get("name", "") or "").strip()[:180],
             "start_time": str(raw_match.get("start_time", "") or "").strip()[:40],
+            "end_time": str(raw_match.get("end_time", "") or "").strip()[:40],
             "status": str(raw_match.get("status", "not_started") or "not_started").strip().lower(),
             "teams": normalized_teams,
             "winner_id": str(raw_match.get("winner_id", "") or "").strip(),
@@ -249,16 +208,6 @@ class EsportsPredictionMixin:
         raw = self.config.get("esports_prediction_settings", {})
         if not isinstance(raw, dict):
             raw = {}
-        competitions = raw.get("tracked_competitions", DEFAULT_TRACKED_COMPETITIONS)
-        if isinstance(competitions, str):
-            competitions = re.split(r"[,，\n]+", competitions)
-        if not isinstance(competitions, list):
-            competitions = DEFAULT_TRACKED_COMPETITIONS.copy()
-        normalized_competitions = [
-            str(item).strip().casefold() for item in competitions if str(item).strip()
-        ]
-        if normalized_competitions == LEGACY_DEFAULT_TRACKED_COMPETITIONS:
-            normalized_competitions = []
         games = raw.get("games", ["lol", "valorant"])
         if isinstance(games, str):
             games = re.split(r"[,，\s]+", games)
@@ -282,7 +231,6 @@ class EsportsPredictionMixin:
             "provider": str(raw.get("provider", "pandascore") or "pandascore").strip().lower(),
             "pandascore_token": str(raw.get("pandascore_token", "") or "").strip(),
             "games": normalized_games or ["lol", "valorant"],
-            "tracked_competitions": normalized_competitions,
             "sync_interval_minutes": self._normalize_int(
                 raw.get("sync_interval_minutes"), 10, 2
             ),
@@ -435,6 +383,7 @@ class EsportsPredictionMixin:
             "stage": str(raw.get("name", "") or "").strip()[:120],
             "name": f"{teams[0]['name']} vs {teams[1]['name']}",
             "start_time": str(raw.get("begin_at", raw.get("scheduled_at", "")) or "").strip(),
+            "end_time": str(raw.get("end_at", "") or "").strip(),
             "status": status_map.get(raw_status, raw_status),
             "teams": teams,
             "winner_id": winner_id,
@@ -457,17 +406,6 @@ class EsportsPredictionMixin:
                 ]
             ).casefold(),
         }
-
-    def _is_tracked_match(self, match: Dict[str, Any], settings: Dict[str, Any]) -> bool:
-        tokens = settings["tracked_competitions"]
-        if not tokens:
-            return True
-        haystack = str(match.get("_filter_text", match.get("competition", ""))).casefold()
-        excluded = [token[1:].strip() for token in tokens if token.startswith("!")]
-        if any(token and token in haystack for token in excluded):
-            return False
-        included = [token for token in tokens if not token.startswith("!")]
-        return not included or any(token in haystack for token in included)
 
     @staticmethod
     def _competition_filter_text(match: Dict[str, Any]) -> str:
@@ -500,6 +438,31 @@ class EsportsPredictionMixin:
             )
             or re.search(r"\bvalorant (?:masters|champions)\b", text)
         )
+
+    def _is_recent_match_result(
+        self, match: Dict[str, Any], now: datetime.datetime | None = None
+    ) -> bool:
+        if str(match.get("status", "")).lower() not in TERMINAL_MATCH_STATUSES:
+            return True
+        reference = next(
+            (
+                parsed
+                for parsed in (
+                    self._parse_esports_datetime(match.get("settled_at")),
+                    self._parse_esports_datetime(match.get("end_time")),
+                    self._parse_esports_datetime(match.get("start_time")),
+                    self._parse_esports_datetime(match.get("updated_at")),
+                )
+                if parsed is not None
+            ),
+            None,
+        )
+        if reference is None:
+            return False
+        cutoff = (now or self._utcnow()) - datetime.timedelta(
+            hours=MATCH_RESULT_RETENTION_HOURS
+        )
+        return reference >= cutoff
 
     @staticmethod
     def _rating_key(game: str, team_id: str) -> str:
@@ -829,32 +792,15 @@ class EsportsPredictionMixin:
         rating_updates = 0
         ignored = 0
         now = self._utcnow()
-        candidate_cutoff = now - datetime.timedelta(days=CANDIDATE_MAX_AGE_DAYS)
         async with self._data_lock:
             esports = self._get_esports_store()
             matches = esports.setdefault("matches", {})
-            candidates = esports.setdefault("candidates", {})
-            expired_ids = []
-            for candidate_id, candidate in candidates.items():
-                if not isinstance(candidate, dict):
-                    continue
-                start_time = self._parse_esports_datetime(candidate.get("start_time"))
-                if (
-                    str(candidate.get("status", "")).lower()
-                    in CANDIDATE_TERMINAL_STATUSES
-                    or (start_time is not None and start_time < candidate_cutoff)
-                    or not self._is_tier_one_match(candidate)
-                ):
-                    expired_ids.append(candidate_id)
-            for candidate_id in expired_ids:
-                candidates.pop(candidate_id, None)
-
             for match in ordered:
                 match_id = match["id"]
+                existing = matches.get(match_id)
                 if not self._is_tier_one_match(match):
                     ignored += 1
-                    candidates.pop(match_id, None)
-                    if match_id in matches:
+                    if isinstance(existing, dict):
                         changed, _ = self._upsert_synced_match_locked(match)
                         stored_match = matches[match_id]
                         if stored_match.get("visible", True):
@@ -862,32 +808,23 @@ class EsportsPredictionMixin:
                             changed = True
                         updated += int(changed)
                     continue
-                if match_id in matches or self._is_tracked_match(match, settings):
-                    if match.get("status") == "finished" and match.get("winner_id"):
-                        if self._apply_rating_result_locked(match):
-                            rating_updates += 1
-                    changed, was_created = self._upsert_synced_match_locked(match)
-                    created += int(was_created)
-                    updated += int(changed and not was_created)
-                    candidates.pop(match_id, None)
+                status = str(match.get("status", "")).lower()
+                if status == "finished" and match.get("winner_id"):
+                    if self._apply_rating_result_locked(match):
+                        rating_updates += 1
+                if status in REFUND_MATCH_STATUSES and not isinstance(existing, dict):
+                    ignored += 1
                     continue
-                if str(match.get("status", "")).lower() in CANDIDATE_TERMINAL_STATUSES:
-                    candidates.pop(match_id, None)
+                if (
+                    status == "finished"
+                    and not isinstance(existing, dict)
+                    and not self._is_recent_match_result(match, now)
+                ):
+                    ignored += 1
                     continue
-                existing = candidates.get(match_id)
-                candidate = dict(match)
-                candidate.pop("_filter_text", None)
-                candidate["dismissed"] = (
-                    bool(existing.get("dismissed", False))
-                    if isinstance(existing, dict)
-                    else False
-                )
-                candidate["first_seen_at"] = (
-                    str(existing.get("first_seen_at", "") or "")
-                    if isinstance(existing, dict)
-                    else ""
-                ) or now.isoformat(timespec="seconds")
-                candidates[match_id] = candidate
+                changed, was_created = self._upsert_synced_match_locked(match)
+                created += int(was_created)
+                updated += int(changed and not was_created)
             settled, refunded = self._settle_ready_matches_locked()
             sync = self._get_esports_store().setdefault("sync", {})
             sync["last_attempt_at"] = attempt_at
@@ -895,8 +832,7 @@ class EsportsPredictionMixin:
             sync["last_error"] = "；".join(errors)[:500]
             sync["last_summary"] = (
                 f"读取 {len(unique)} 场，新增 {created}，更新 {updated}，"
-                f"忽略非一线 {ignored}，评分更新 {rating_updates}，结算 {settled}，退款 {refunded}，"
-                f"待选 {len(candidates)}"
+                f"忽略 {ignored}，评分更新 {rating_updates}，结算 {settled}，退款 {refunded}"
             )
             await self._save_data_locked()
         logger.info(f"{reason}完成：{sync['last_summary']}")
@@ -908,33 +844,9 @@ class EsportsPredictionMixin:
             "rating_updates": rating_updates,
             "settled": settled,
             "refunded": refunded,
-            "candidates": len(candidates),
             "errors": errors,
             "summary": sync["last_summary"],
         }
-
-    def _include_candidate_locked(self, match_id: str) -> Dict[str, Any] | None:
-        esports = self._get_esports_store()
-        candidates = esports.setdefault("candidates", {})
-        candidate = candidates.get(str(match_id))
-        if not isinstance(candidate, dict):
-            return None
-        if (
-            str(candidate.get("status", "")).lower()
-            in CANDIDATE_TERMINAL_STATUSES
-            or not self._is_tier_one_match(candidate)
-        ):
-            candidates.pop(str(match_id), None)
-            return None
-        match = {
-            key: value
-            for key, value in candidate.items()
-            if key not in {"dismissed", "first_seen_at"}
-        }
-        match.pop("_filter_text", None)
-        self._upsert_synced_match_locked(match)
-        candidates.pop(str(match_id), None)
-        return esports["matches"].get(match["id"])
 
     async def _esports_sync_loop(self) -> None:
         try:
@@ -1311,6 +1223,7 @@ class EsportsPredictionMixin:
             "stage": "",
             "name": f"{teams[0]['name']} vs {teams[1]['name']}",
             "start_time": start_utc.isoformat(timespec="seconds"),
+            "end_time": "",
             "status": "not_started",
             "teams": teams,
             "winner_id": "",

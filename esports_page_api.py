@@ -28,12 +28,6 @@ class EsportsPredictionPageApi:
             ("/settings/save", self.save_settings, ["POST"], "Save esports settings"),
             ("/matches/add", self.add_match, ["POST"], "Add esports match"),
             ("/matches/action", self.match_action, ["POST"], "Manage esports match"),
-            (
-                "/candidates/action",
-                self.candidate_action,
-                ["POST"],
-                "Manage esports match candidates",
-            ),
         ]
         registered = getattr(self.plugin.context, "registered_web_apis", None)
         snapshot = list(registered) if isinstance(registered, list) else None
@@ -83,7 +77,6 @@ class EsportsPredictionPageApi:
             "provider": settings["provider"],
             "token_configured": bool(settings["pandascore_token"]),
             "games": settings["games"],
-            "tracked_competitions": settings["tracked_competitions"],
             "sync_interval_minutes": settings["sync_interval_minutes"],
             "min_bet": settings["min_bet"],
             "max_bet": settings["max_bet"],
@@ -97,15 +90,26 @@ class EsportsPredictionPageApi:
         esports = self.plugin._get_esports_store()
         matches = esports.setdefault("matches", {})
         bets = esports.setdefault("bets", {})
-        candidates = esports.setdefault("candidates", {})
+        now = self.plugin._utcnow()
         match_views = []
         for match in matches.values():
             if not isinstance(match, dict):
+                continue
+            if not self.plugin._is_tier_one_match(match):
+                continue
+            if not self.plugin._is_recent_match_result(match, now):
                 continue
             teams = match.get("teams", [])
             if not isinstance(teams, list) or len(teams) != 2:
                 continue
             pool = self.plugin._match_pool_locked(match["id"])
+            _, close_deadline = self.plugin._match_deadlines(match)
+            betting_open = bool(
+                match.get("visible", True)
+                and match.get("status") in {"not_started", "running"}
+                and close_deadline is not None
+                and now < close_deadline
+            )
             match_views.append(
                 {
                     "id": match["id"],
@@ -116,6 +120,7 @@ class EsportsPredictionPageApi:
                     "start_time": match.get("start_time", ""),
                     "start_time_text": self.plugin._format_esports_time(match.get("start_time")),
                     "status": match.get("status", ""),
+                    "betting_open": betting_open,
                     "visible": bool(match.get("visible", True)),
                     "odds_locked": bool(match.get("odds_locked", False)),
                     "winner_id": match.get("winner_id", ""),
@@ -123,6 +128,8 @@ class EsportsPredictionPageApi:
                         {
                             "id": team.get("id", ""),
                             "name": team.get("name", ""),
+                            "code": team.get("code", ""),
+                            "score": team.get("score", 0),
                             "odds": match.get("odds", {}).get(team.get("id"), 1.0),
                             "probability": match.get("probabilities", {}).get(team.get("id"), 0.5),
                             "pool": pool.get(team.get("id"), 0),
@@ -131,29 +138,16 @@ class EsportsPredictionPageApi:
                     ],
                 }
             )
-        match_views.sort(key=lambda item: item["start_time"], reverse=True)
-
-        candidate_views = []
-        for candidate in candidates.values():
-            if not isinstance(candidate, dict):
-                continue
-            teams = candidate.get("teams", [])
-            if not isinstance(teams, list) or len(teams) != 2:
-                continue
-            candidate_views.append(
-                {
-                    "id": candidate.get("id", ""),
-                    "game": candidate.get("game", ""),
-                    "competition": candidate.get("competition", ""),
-                    "name": candidate.get("name", ""),
-                    "start_time": candidate.get("start_time", ""),
-                    "start_time_text": self.plugin._format_esports_time(candidate.get("start_time")),
-                    "status": candidate.get("status", ""),
-                    "dismissed": bool(candidate.get("dismissed", False)),
-                    "teams": [{"name": team.get("name", "")} for team in teams],
-                }
+        match_views.sort(
+            key=lambda item: (
+                0
+                if item["betting_open"]
+                else 2
+                if item["status"] in {"finished", "settled", "refunded", "canceled", "postponed"}
+                else 1,
+                item["start_time"],
             )
-        candidate_views.sort(key=lambda item: item["start_time"])
+        )
 
         bet_views = []
         for bet in bets.values():
@@ -179,22 +173,15 @@ class EsportsPredictionPageApi:
             "sync": dict(esports.setdefault("sync", {})),
             "summary": {
                 "match_count": len(match_views),
-                "open_match_count": sum(
-                    item["status"] in {"not_started", "running"} for item in match_views
-                ),
+                "open_match_count": sum(item["betting_open"] for item in match_views),
                 "bet_count": len(bet_views),
                 "pending_points": sum(
                     int(bet.get("amount", 0))
                     for bet in bets.values()
                     if isinstance(bet, dict) and bet.get("status") == "pending"
                 ),
-                "candidate_count": sum(
-                    1 for item in candidate_views if not item["dismissed"]
-                ),
-                "dismissed_count": sum(1 for item in candidate_views if item["dismissed"]),
             },
             "matches": match_views[:200],
-            "candidates": candidate_views[:400],
             "bets": bet_views[:300],
         }
 
@@ -230,7 +217,7 @@ class EsportsPredictionPageApi:
             ):
                 if key in payload:
                     updated[key] = payload[key]
-            for key in ("games", "tracked_competitions"):
+            for key in ("games",):
                 value = payload.get(key)
                 if isinstance(value, list):
                     updated[key] = [self._text(item, 120) for item in value if self._text(item, 120)]
@@ -300,49 +287,4 @@ class EsportsPredictionPageApi:
                 return {"ok": False, "error": "不支持的操作。"}
             match["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
             await self.plugin._save_data_locked()
-        return {"ok": True, "message": message}
-
-    async def candidate_action(self) -> dict[str, Any]:
-        payload = await self._payload()
-        action = self._text(payload.get("action"), 20).lower()
-        raw_ids = payload.get("match_ids")
-        if isinstance(raw_ids, str):
-            raw_ids = [raw_ids]
-        if not isinstance(raw_ids, list):
-            raw_ids = []
-        match_ids = [self._text(item, 120) for item in raw_ids if self._text(item, 120)]
-        if action not in {"include", "dismiss", "restore"}:
-            return {"ok": False, "error": "不支持的操作。"}
-        if not match_ids:
-            return {"ok": False, "error": "请选择候选比赛。"}
-        included = 0
-        dismissed = 0
-        restored = 0
-        display_ids: list[str] = []
-        async with self.plugin._data_lock:
-            candidates = self.plugin._get_esports_store().setdefault("candidates", {})
-            for match_id in match_ids:
-                candidate = candidates.get(match_id)
-                if not isinstance(candidate, dict):
-                    continue
-                if action == "include":
-                    match = self.plugin._include_candidate_locked(match_id)
-                    if match is not None:
-                        included += 1
-                        display_ids.append(str(match.get("display_id", "")))
-                elif action == "dismiss":
-                    candidate["dismissed"] = True
-                    dismissed += 1
-                else:
-                    candidate["dismissed"] = False
-                    restored += 1
-            if not (included or dismissed or restored):
-                return {"ok": False, "error": "未找到所选比赛。"}
-            await self.plugin._save_data_locked()
-        if action == "include":
-            message = f"已加入竞猜 {included} 场：{'、'.join(display_ids[:8])}{'…' if len(display_ids) > 8 else ''}"
-        elif action == "dismiss":
-            message = f"已忽略 {dismissed} 场候选比赛。"
-        else:
-            message = f"已恢复 {restored} 场候选比赛。"
         return {"ok": True, "message": message}

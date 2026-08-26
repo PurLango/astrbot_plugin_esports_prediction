@@ -3,7 +3,7 @@
 
   const DEFAULT_TEMPLATE = "兑换成功！\n兑换物：{item}\n兑换内容：{content}\n消耗 {cost} {points_name}，剩余 {remaining} {points_name}。";
   const DEFAULT_SCOPE = { mode: "blacklist", scope: [] };
-  const state = { data: null, draft: [], scope: { ...DEFAULT_SCOPE }, settingsDraft: {}, selected: -1, dirty: false, settingsDirty: false, saving: false, settingsSaving: false, saveStatus: "clean", page: "overview", view: "inventory", theme: "system", groupId: "", groupQuery: "", historyRange: "7d", dashboardLoading: false, dashboardRequest: 0, esportsData: null, esportsQuery: "", esportsLoading: false, esportsCandidateQuery: "", esportsCandidateShowDismissed: false, esportsCandidateSelected: new Set() };
+  const state = { data: null, draft: [], scope: { ...DEFAULT_SCOPE }, settingsDraft: {}, selected: -1, dirty: false, settingsDirty: false, saving: false, settingsSaving: false, saveStatus: "clean", page: "overview", view: "inventory", theme: "system", groupId: "", groupQuery: "", historyRange: "7d", dashboardLoading: false, dashboardRequest: 0, esportsData: null, esportsQuery: "", esportsGame: "", esportsLoading: false };
   let saveStateTimer = 0;
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -622,17 +622,19 @@
     const data = state.esportsData;
     if (!data) return;
     const query = state.esportsQuery.toLocaleLowerCase();
-    const matches = (data.matches || []).filter((item) => !query || `${item.display_id} ${item.competition} ${item.name}`.toLocaleLowerCase().includes(query));
+    const matches = (data.matches || [])
+      .filter((item) => !state.esportsGame || item.game === state.esportsGame)
+      .filter((item) => !query || `${item.display_id} ${item.competition} ${item.name}`.toLocaleLowerCase().includes(query));
     $("#esportsMatchRows").innerHTML = matches.length ? matches.map((match) => {
       const [teamA, teamB] = match.teams || [];
       if (!teamA || !teamB) return "";
       const terminal = ["settled", "refunded", "canceled", "postponed"].includes(match.status);
       const statusClass = terminal ? "done" : match.status === "running" ? "live" : "open";
       return `<tr>
-        <td><strong>${escapeHtml(match.display_id)}</strong><small>${escapeHtml(String(match.game || "").toUpperCase())} · ${escapeHtml(match.competition)}</small><span>${escapeHtml(match.name)}</span></td>
+        <td class="esports-match-main"><strong>${escapeHtml(match.display_id)}</strong><small>${escapeHtml(match.game === "lol" ? "英雄联盟" : "无畏契约")} · ${escapeHtml(match.competition)}</small><span>${escapeHtml(match.name)}</span></td>
         <td><span class="esports-time">${escapeHtml(match.start_time_text)}</span></td>
-        <td><div class="esports-team-line"><b>${escapeHtml(teamA.name)}</b><span>${Number(teamA.probability || 0).toLocaleString("zh-CN", { style: "percent", maximumFractionDigits: 1 })} · ${Number(teamA.odds || 1).toFixed(2)} · ${formatNumber(teamA.pool)}</span></div><div class="esports-team-line"><b>${escapeHtml(teamB.name)}</b><span>${Number(teamB.probability || 0).toLocaleString("zh-CN", { style: "percent", maximumFractionDigits: 1 })} · ${Number(teamB.odds || 1).toFixed(2)} · ${formatNumber(teamB.pool)}</span></div></td>
-        <td><span class="esports-status ${statusClass}">${escapeHtml(esportsStatusName(match.status))}</span><small>${match.visible ? "群内可见" : "已隐藏"}${match.odds_locked ? " · 倍率已锁" : ""}</small></td>
+        <td><div class="esports-team-line"><b>${escapeHtml(teamA.code || teamA.name)}</b><span>${Number(teamA.probability || 0).toLocaleString("zh-CN", { style: "percent", maximumFractionDigits: 1 })} · ${Number(teamA.odds || 1).toFixed(2)} · ${formatNumber(teamA.pool)}</span></div><div class="esports-team-line"><b>${escapeHtml(teamB.code || teamB.name)}</b><span>${Number(teamB.probability || 0).toLocaleString("zh-CN", { style: "percent", maximumFractionDigits: 1 })} · ${Number(teamB.odds || 1).toFixed(2)} · ${formatNumber(teamB.pool)}</span></div></td>
+        <td><div class="esports-status-stack"><span class="esports-status ${statusClass}">${escapeHtml(esportsStatusName(match.status))}</span>${match.betting_open ? '<span class="esports-status betting">竞猜中</span>' : ""}</div><small>${match.visible ? "群内可见" : "已隐藏"}${match.odds_locked ? " · 倍率已锁" : ""}</small></td>
         <td><div class="esports-actions"><button type="button" data-esports-action="settle" data-match="${escapeHtml(match.id)}" data-team="${escapeHtml(teamA.id)}" ${terminal ? "disabled" : ""}>A 胜</button><button type="button" data-esports-action="settle" data-match="${escapeHtml(match.id)}" data-team="${escapeHtml(teamB.id)}" ${terminal ? "disabled" : ""}>B 胜</button><button type="button" data-esports-action="refund" data-match="${escapeHtml(match.id)}" ${terminal ? "disabled" : ""}>退款</button><button type="button" data-esports-action="close" data-match="${escapeHtml(match.id)}" ${terminal ? "disabled" : ""}>封盘</button><button type="button" data-esports-action="${match.visible ? "hide" : "show"}" data-match="${escapeHtml(match.id)}">${match.visible ? "隐藏" : "显示"}</button></div></td>
       </tr>`;
     }).join("") : '<tr><td class="esports-empty" colspan="5">没有匹配的比赛</td></tr>';
@@ -641,64 +643,6 @@
     $("#esportsBetRows").innerHTML = bets.length ? bets.map((bet) => `<tr>
       <td><strong>${escapeHtml(bet.match_display_id)}</strong></td><td>${escapeHtml(bet.user_id)}</td><td>${escapeHtml(bet.team_name)}</td><td>${formatNumber(bet.amount)}</td><td>${Number(bet.odds || 1).toFixed(2)}</td><td><span class="esports-status ${bet.status === "won" ? "open" : ["lost", "refunded", "withdrawn"].includes(bet.status) ? "done" : ""}">${escapeHtml(esportsBetStatusName(bet.status))}</span><small>返还 ${formatNumber(bet.payout)}</small></td>
     </tr>`).join("") : '<tr><td class="esports-empty" colspan="6">暂无下注记录</td></tr>';
-  }
-
-  function visibleEsportsCandidates() {
-    const data = state.esportsData || {};
-    const query = state.esportsCandidateQuery.toLocaleLowerCase();
-    return (data.candidates || [])
-      .filter((item) => state.esportsCandidateShowDismissed || !item.dismissed)
-      .filter((item) => !query || `${item.competition} ${item.name} ${item.game}`.toLocaleLowerCase().includes(query))
-      .sort((a, b) => (a.dismissed === b.dismissed ? String(a.start_time || "").localeCompare(String(b.start_time || "")) : a.dismissed ? 1 : -1));
-  }
-
-  function renderEsportsCandidates() {
-    const summary = state.esportsData?.summary || {};
-    const counts = `当前待选 ${formatNumber(summary.candidate_count)} 场，已忽略 ${formatNumber(summary.dismissed_count)} 场。`;
-    $("#esportsCandidateSummary").textContent = counts;
-    const rows = visibleEsportsCandidates();
-    $("#esportsCandidateRows").innerHTML = rows.length ? rows.map((item) => {
-      const [teamA, teamB] = item.teams || [];
-      if (!teamA || !teamB) return "";
-      const terminal = ["finished", "canceled", "cancelled", "postponed", "abandoned"].includes(item.status);
-      const statusClass = terminal ? "done" : item.status === "running" ? "live" : "open";
-      const checked = state.esportsCandidateSelected.has(item.id) ? "checked" : "";
-      return `<tr class="${item.dismissed ? "dismissed-row" : ""}">
-        <td class="check-col"><input type="checkbox" data-candidate-check="${escapeHtml(item.id)}" ${checked} ${item.dismissed ? "" : terminal ? "disabled" : ""} aria-label="选择 ${escapeHtml(item.name)}" /></td>
-        <td><strong>${escapeHtml(String(item.game || "").toUpperCase())} · ${escapeHtml(item.competition)}</strong><span>${escapeHtml(teamA.name)} vs ${escapeHtml(teamB.name)}</span></td>
-        <td><span class="esports-time">${escapeHtml(item.start_time_text)}</span></td>
-        <td><span class="esports-status ${statusClass}">${escapeHtml(esportsStatusName(item.status))}</span>${item.dismissed ? "<small>已忽略</small>" : ""}</td>
-        <td><div class="esports-actions">${item.dismissed
-          ? `<button type="button" data-candidate-action="restore" data-match="${escapeHtml(item.id)}">恢复</button>`
-          : `<button type="button" data-candidate-action="include" data-match="${escapeHtml(item.id)}" ${terminal ? "disabled title=\"比赛已结束，无法加入竞猜\"" : ""}>加入</button><button type="button" data-candidate-action="dismiss" data-match="${escapeHtml(item.id)}">忽略</button>`}</div></td>
-      </tr>`;
-    }).join("") : `<tr><td class="esports-empty" colspan="5">${state.esportsCandidateShowDismissed ? "没有匹配的候选比赛" : "暂无候选比赛，可在同步后从数据源挑选"}</td></tr>`;
-    const selectable = rows.filter((item) => !item.dismissed && !["finished", "canceled", "cancelled", "postponed", "abandoned"].includes(item.status));
-    $("#esportsCandidateAll").checked = selectable.length > 0 && selectable.every((item) => state.esportsCandidateSelected.has(item.id));
-    updateEsportsCandidateBar();
-  }
-
-  function updateEsportsCandidateBar() {
-    const bar = $("#esportsCandidateBar");
-    const count = state.esportsCandidateSelected.size;
-    bar.hidden = count === 0;
-    $("#esportsCandidateSelectedLabel").textContent = `已选 ${count} 场`;
-  }
-
-  async function handleEsportsCandidateAction(button) {
-    const action = button.dataset.candidateAction;
-    const matchId = button.dataset.match;
-    button.disabled = true;
-    const done = await postEsports("candidates/action", { action, match_ids: [matchId] }, "操作完成");
-    if (done) state.esportsCandidateSelected.delete(matchId);
-    else button.disabled = false;
-  }
-
-  async function esportsCandidateBulk(action) {
-    const ids = [...state.esportsCandidateSelected];
-    if (!ids.length) return;
-    const done = await postEsports("candidates/action", { action, match_ids: ids }, "操作完成");
-    if (done) state.esportsCandidateSelected.clear();
   }
 
   function renderEsports() {
@@ -714,13 +658,11 @@
     $("#esportsEnabled").checked = Boolean(settings.enabled);
     $("#esportsSyncEnabled").checked = Boolean(settings.sync_enabled);
     $("#esportsSyncInterval").value = settings.sync_interval_minutes ?? 10;
-    $("#esportsCompetitions").value = (settings.tracked_competitions || []).join("\n");
     $("#esportsGameLol").checked = games.includes("lol");
     $("#esportsGameValorant").checked = games.includes("valorant");
     $("#esportsToken").value = "";
     $("#esportsToken").placeholder = settings.token_configured ? "已配置；留空保持不变" : "粘贴 PandaScore Token";
     renderEsportsTables();
-    renderEsportsCandidates();
     icons();
   }
 
@@ -783,7 +725,6 @@
       sync_interval_minutes: Number($("#esportsSyncInterval").value),
       pandascore_token: $("#esportsToken").value.trim(),
       games: [$("#esportsGameLol").checked ? "lol" : "", $("#esportsGameValorant").checked ? "valorant" : ""].filter(Boolean),
-      tracked_competitions: uniqueLines($("#esportsCompetitions").value),
     }, "竞猜设置已保存");
     button.disabled = false;
     if (saved) $("#esportsToken").value = "";
@@ -1070,34 +1011,19 @@
     $("#esportsSaveSettingsButton").addEventListener("click", saveEsportsSettings);
     $("#esportsAddMatchButton").addEventListener("click", addEsportsMatch);
     $("#esportsMatchSearch").addEventListener("input", (event) => { state.esportsQuery = event.target.value; renderEsportsTables(); });
+    $$("[data-esports-game-filter]").forEach((button) => button.addEventListener("click", () => {
+      state.esportsGame = button.dataset.esportsGameFilter || "";
+      $$("[data-esports-game-filter]").forEach((item) => {
+        const active = item === button;
+        item.classList.toggle("active", active);
+        item.setAttribute("aria-pressed", String(active));
+      });
+      renderEsportsTables();
+    }));
     $("#esportsMatchRows").addEventListener("click", (event) => {
       const button = event.target.closest("button[data-esports-action]");
       if (button && !button.disabled) handleEsportsAction(button);
     });
-    $("#esportsCandidateSearch").addEventListener("input", (event) => { state.esportsCandidateQuery = event.target.value; renderEsportsCandidates(); });
-    $("#esportsCandidateDismissed").addEventListener("change", (event) => { state.esportsCandidateShowDismissed = event.target.checked; renderEsportsCandidates(); });
-    $("#esportsCandidateRows").addEventListener("click", (event) => {
-      const button = event.target.closest("button[data-candidate-action]");
-      if (button && !button.disabled) handleEsportsCandidateAction(button);
-    });
-    $("#esportsCandidateRows").addEventListener("change", (event) => {
-      const checkbox = event.target.closest("input[data-candidate-check]");
-      if (!checkbox) return;
-      const matchId = checkbox.dataset.candidateCheck;
-      if (checkbox.checked) state.esportsCandidateSelected.add(matchId);
-      else state.esportsCandidateSelected.delete(matchId);
-      updateEsportsCandidateBar();
-      const rows = visibleEsportsCandidates().filter((item) => !item.dismissed && !["finished", "canceled", "cancelled", "postponed", "abandoned"].includes(item.status));
-      $("#esportsCandidateAll").checked = rows.length > 0 && rows.every((item) => state.esportsCandidateSelected.has(item.id));
-    });
-    $("#esportsCandidateAll").addEventListener("change", (event) => {
-      const checked = event.target.checked;
-      const rows = visibleEsportsCandidates().filter((item) => !item.dismissed && !["finished", "canceled", "cancelled", "postponed", "abandoned"].includes(item.status));
-      rows.forEach((item) => { if (checked) state.esportsCandidateSelected.add(item.id); else state.esportsCandidateSelected.delete(item.id); });
-      renderEsportsCandidates();
-    });
-    $("#esportsIncludeSelected").addEventListener("click", () => esportsCandidateBulk("include"));
-    $("#esportsDismissSelected").addEventListener("click", () => esportsCandidateBulk("dismiss"));
     $$(".workspace-tab").forEach((button) => button.addEventListener("click", () => switchPage(button.dataset.page)));
     $("#settingsNav").addEventListener("click", (event) => {
       const button = event.target.closest("[data-settings-target]");

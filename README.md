@@ -4,7 +4,7 @@
 
 > 本插件只使用没有现实价值、不可提现或兑换现金的虚拟积分。
 
-- 当前版本：`2.4.3`
+- 当前版本：`2.4.4`
 - 最低 AstrBot 版本：`4.22.0`
 - 数据来源：[PandaScore](https://pandascore.co/)
 
@@ -13,12 +13,13 @@
 - 英雄联盟：LPL、LCK、先锋赛（First Stand）、MSI、全球总决赛（Worlds）
 - 无畏契约：VCT Americas、EMEA、Pacific、China 四大赛区正赛，以及 Masters、Champions
 
-Challengers、Ascension、Game Changers、学院联赛及其他次级赛事会在同步时直接忽略，不进入候选列表。`tracked_competitions` 通常留空；如需减少上述一线赛事，可填写关键词进一步缩小范围。符合一线白名单但未命中自定义关键词的比赛才会进入候选列表。
+其他赛事会在同步时直接忽略。
 
 ## 主要功能
 
 - 自动同步指定一线赛事的赛程、比赛状态与最终结果
-- 非一线赛事直接忽略；一线赛事中未被自定义关键词收录且尚未结束的比赛进入候选列表
+- 同步结果只保留筛选后的比赛；首次发现时已经取消的比赛不收录
+- 已收录后取消的比赛保留记录并退款；完赛结果在运营台展示 24 小时
 - 群聊赛事列表、详情和竞猜结果优先显示 PandaScore 提供的官方战队缩写
 - 第一版仅竞猜比赛胜者
 - 根据历史赛果运行 Elo 模型，生成双方胜率与竞猜倍率
@@ -59,7 +60,6 @@ Challengers、Ascension、Game Changers、学院联赛及其他次级赛事会�
 - `enabled`：启用赛事竞猜
 - `pandascore_token`：PandaScore API Token
 - `games`：同步 `lol`、`valorant` 中的哪些项目
-- `tracked_competitions`：可选的二次筛选关键词；留空即收录全部内置一线赛事
 - `sync_enabled`：启用定时自动同步
 - `sync_interval_minutes`：同步间隔，默认 `10` 分钟
 - `min_bet` / `max_bet`：单次最低与每场累计最高下注
@@ -122,8 +122,8 @@ PandaScore Token 只应保存在 AstrBot 本地配置中，不要发送到群聊
 
 管理页面可以：
 
-- 配置 PandaScore Token、同步开关、游戏与赛事范围
-- 查看已收录比赛及其状态
+- 配置 PandaScore Token、同步开关和游戏范围
+- 查看比赛状态与竞猜开放状态，并按游戏筛选
 - 手动同步或添加比赛
 - 封盘、隐藏、显示、退款和结算
 

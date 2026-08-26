@@ -20,19 +20,14 @@ class IntegratedEsportsPageTests(unittest.TestCase):
         self.assertIn('id="esportsPage"', html)
         self.assertIn('id="esportsMatchRows"', html)
         self.assertIn('id="esportsBetRows"', html)
-
-    def test_operations_console_contains_candidate_workspace(self):
-        html = (ROOT / "pages" / "兑换管理" / "index.html").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn('id="esportsCandidateRows"', html)
-        self.assertIn('id="esportsCandidateAll"', html)
-        self.assertIn('id="esportsIncludeSelected"', html)
+        self.assertIn('data-esports-game-filter="lol"', html)
+        self.assertIn('data-esports-game-filter="valorant"', html)
+        self.assertNotIn("候选比赛", html)
         script = (ROOT / "pages" / "兑换管理" / "app.js").read_text(
             encoding="utf-8"
         )
-        self.assertIn("candidates/action", script)
-        self.assertIn("renderEsportsCandidates", script)
+        self.assertIn("match.betting_open", script)
+        self.assertNotIn("candidates/action", script)
 
     def test_legacy_standalone_esports_page_is_removed(self):
         self.assertFalse((ROOT / "pages" / "竞猜管理" / "index.html").exists())

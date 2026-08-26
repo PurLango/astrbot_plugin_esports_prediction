@@ -63,10 +63,6 @@ def add_future_match(plugin, hours=3):
     )
 
 
-def track_only_lpl(plugin):
-    plugin.config["esports_prediction_settings"]["tracked_competitions"] = ["lpl"]
-
-
 class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
     async def test_today_matches_are_supplemented_with_nearby_open_matches(self):
         plugin = build_plugin()
@@ -114,16 +110,6 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(all(plugin._is_tier_one_match(match) for match in accepted))
         self.assertFalse(any(plugin._is_tier_one_match(match) for match in rejected))
-
-    async def test_legacy_default_keywords_migrate_to_full_tier_one_allowlist(self):
-        plugin = build_plugin()
-        plugin.config["esports_prediction_settings"]["tracked_competitions"] = list(
-            esports_feature.LEGACY_DEFAULT_TRACKED_COMPETITIONS
-        )
-
-        settings = plugin._get_esports_settings()
-
-        self.assertEqual(settings["tracked_competitions"], [])
 
     async def test_match_display_and_bet_prefer_official_team_code(self):
         plugin = build_plugin()
@@ -231,20 +217,6 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         stored = plugin.data["esports"]["matches"][match["id"]]
         self.assertEqual(stored["odds"], original_odds)
 
-    async def test_competition_filter_supports_exclusions(self):
-        plugin = build_plugin()
-        settings = plugin._get_esports_settings()
-        settings["tracked_competitions"] = ["lck", "!challengers"]
-
-        self.assertTrue(
-            plugin._is_tracked_match({"_filter_text": "lck 2026 season"}, settings)
-        )
-        self.assertFalse(
-            plugin._is_tracked_match(
-                {"_filter_text": "lck challengers league 2026"}, settings
-            )
-        )
-
     async def test_provider_stops_pagination_after_short_page(self):
         provider = PandaScoreProvider("test-token")
         calls = []
@@ -261,6 +233,8 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class FakeSyncProvider:
+    cancel_existing = False
+
     def __init__(self, token, **kwargs):
         pass
 
@@ -273,6 +247,7 @@ class FakeSyncProvider:
                     "id": 555004,
                     "status": "finished",
                     "begin_at": "2026-08-25T12:00:00Z",
+                    "end_at": "2026-08-25T13:00:00Z",
                     "winner_id": 401,
                     "opponents": [
                         {"id": 401, "name": "Ended Alpha", "acronym": "EA"},
@@ -280,14 +255,38 @@ class FakeSyncProvider:
                     ],
                     "league": {"name": "LCK", "slug": "lck"},
                     "serie": {"name": "Summer 2026"},
-                }
+                },
+                {
+                    "id": 555005,
+                    "status": "finished",
+                    "begin_at": "2026-08-23T12:00:00Z",
+                    "end_at": "2026-08-23T13:00:00Z",
+                    "winner_id": 501,
+                    "opponents": [
+                        {"id": 501, "name": "Old Alpha", "acronym": "OA"},
+                        {"id": 502, "name": "Old Beta", "acronym": "OB"},
+                    ],
+                    "league": {"name": "LPL", "slug": "lpl"},
+                    "serie": {"name": "Summer 2026"},
+                },
+                {
+                    "id": 555006,
+                    "status": "canceled",
+                    "begin_at": "2026-08-27T10:00:00Z",
+                    "opponents": [
+                        {"id": 601, "name": "Canceled Alpha"},
+                        {"id": 602, "name": "Canceled Beta"},
+                    ],
+                    "league": {"name": "LPL", "slug": "lpl"},
+                    "serie": {"name": "Summer 2026"},
+                },
             ]
         if state != "upcoming":
             return []
         return [
             {
                 "id": 555001,
-                "status": "not_started",
+                "status": "canceled" if self.cancel_existing else "not_started",
                 "begin_at": "2026-08-28T12:00:00Z",
                 "opponents": [{"id": 101, "name": "Alpha"}, {"id": 102, "name": "Beta"}],
                 "league": {"name": "LPL", "slug": "lpl"},
@@ -312,24 +311,12 @@ class FakeSyncProvider:
         ]
 
 
-class EsportsCandidateSyncTests(unittest.IsolatedAsyncioTestCase):
-    async def test_sync_does_not_add_already_finished_match_to_candidates(self):
+class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sync_stores_only_filtered_matches_and_recent_results(self):
         plugin = build_plugin()
-        track_only_lpl(plugin)
-        original = esports_feature.PandaScoreProvider
-        esports_feature.PandaScoreProvider = FakeSyncProvider
-        try:
-            await plugin._sync_esports_once("测试")
-        finally:
-            esports_feature.PandaScoreProvider = original
-
-        store = plugin._get_esports_store()
-        self.assertNotIn("pandascore:lol:555004", store["matches"])
-        self.assertNotIn("pandascore:lol:555004", store["candidates"])
-
-    async def test_sync_routes_untracked_matches_to_candidates(self):
-        plugin = build_plugin()
-        track_only_lpl(plugin)
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 26, 8, 0, tzinfo=datetime.timezone.utc
+        )
         original = esports_feature.PandaScoreProvider
         esports_feature.PandaScoreProvider = FakeSyncProvider
         try:
@@ -339,134 +326,42 @@ class EsportsCandidateSyncTests(unittest.IsolatedAsyncioTestCase):
 
         store = plugin._get_esports_store()
         self.assertIn("pandascore:lol:555001", store["matches"])
-        self.assertNotIn("pandascore:lol:555002", store["matches"])
-        self.assertIn("pandascore:lol:555002", store["candidates"])
-        self.assertNotIn("pandascore:lol:555003", store["candidates"])
-        self.assertFalse(store["candidates"]["pandascore:lol:555002"]["dismissed"])
-        self.assertEqual(result["candidates"], 1)
-        self.assertEqual(result["ignored"], 1)
-
-    async def test_sync_keeps_dismissed_flag_on_candidates(self):
-        plugin = build_plugin()
-        track_only_lpl(plugin)
-        store = plugin._get_esports_store()
-        store["candidates"]["pandascore:lol:555002"] = {
-            "id": "pandascore:lol:555002",
-            "display_id": "",
-            "source": "pandascore",
-            "source_id": "555002",
-            "game": "lol",
-            "competition": "LCK 2026 Summer",
-            "stage": "",
-            "name": "Gamma vs Delta",
-            "start_time": "2026-08-28T13:00:00Z",
-            "status": "not_started",
-            "teams": [
-                {"id": "555002:team1", "name": "Gamma", "code": "", "image_url": "", "score": 0},
-                {"id": "555002:team2", "name": "Delta", "code": "", "image_url": "", "score": 0},
-            ],
-            "winner_id": "",
-            "odds": {},
-            "probabilities": {},
-            "odds_locked": False,
-            "visible": True,
-            "settled_at": "",
-            "created_at": "",
-            "updated_at": "",
-            "dismissed": True,
-            "first_seen_at": "2026-08-25T00:00:00+00:00",
-        }
-        original = esports_feature.PandaScoreProvider
-        esports_feature.PandaScoreProvider = FakeSyncProvider
-        try:
-            await plugin._sync_esports_once("测试")
-        finally:
-            esports_feature.PandaScoreProvider = original
-
-        candidate = plugin._get_esports_store()["candidates"]["pandascore:lol:555002"]
-        self.assertTrue(candidate["dismissed"])
-        self.assertEqual(candidate["first_seen_at"], "2026-08-25T00:00:00+00:00")
-
-    async def test_include_candidate_promotes_match_with_odds(self):
-        plugin = build_plugin()
-        store = plugin._get_esports_store()
-        store["candidates"]["pandascore:lol:555002"] = {
-            "id": "pandascore:lol:555002",
-            "display_id": "",
-            "source": "pandascore",
-            "source_id": "555002",
-            "game": "lol",
-            "competition": "LCK 2026 Summer",
-            "stage": "",
-            "name": "Gamma vs Delta",
-            "start_time": "2026-08-28T13:00:00Z",
-            "status": "not_started",
-            "teams": [
-                {"id": "555002:team1", "name": "Gamma", "code": "", "image_url": "", "score": 0},
-                {"id": "555002:team2", "name": "Delta", "code": "", "image_url": "", "score": 0},
-            ],
-            "winner_id": "",
-            "odds": {},
-            "probabilities": {},
-            "odds_locked": False,
-            "visible": True,
-            "settled_at": "",
-            "created_at": "",
-            "updated_at": "",
-            "dismissed": False,
-            "first_seen_at": "",
-        }
-
-        match = plugin._include_candidate_locked("pandascore:lol:555002")
-
-        self.assertIsNotNone(match)
         self.assertIn("pandascore:lol:555002", store["matches"])
-        self.assertNotIn("pandascore:lol:555002", store["candidates"])
-        self.assertTrue(match["display_id"])
-        self.assertEqual(len(match["odds"]), 2)
-        self.assertNotIn("dismissed", match)
-        self.assertNotIn("first_seen_at", match)
+        self.assertIn("pandascore:lol:555004", store["matches"])
+        self.assertNotIn("pandascore:lol:555003", store["matches"])
+        self.assertNotIn("pandascore:lol:555005", store["matches"])
+        self.assertNotIn("pandascore:lol:555006", store["matches"])
+        self.assertNotIn("candidates", store)
+        self.assertEqual(result["ignored"], 3)
 
-    async def test_sync_removes_expired_candidates(self):
+    async def test_match_canceled_after_being_listed_is_retained_and_refunded(self):
         plugin = build_plugin()
-        store = plugin._get_esports_store()
-        stale_start = (
-            datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=5)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        store["candidates"]["pandascore:lol:424242"] = {
-            "id": "pandascore:lol:424242",
-            "display_id": "",
-            "source": "pandascore",
-            "source_id": "424242",
-            "game": "lol",
-            "competition": "LCK 2026 Summer",
-            "stage": "",
-            "name": "Old vs Older",
-            "start_time": stale_start,
-            "status": "not_started",
-            "teams": [
-                {"id": "424242:team1", "name": "Old", "code": "", "image_url": "", "score": 0},
-                {"id": "424242:team2", "name": "Older", "code": "", "image_url": "", "score": 0},
-            ],
-            "winner_id": "",
-            "odds": {},
-            "probabilities": {},
-            "odds_locked": False,
-            "visible": True,
-            "settled_at": "",
-            "created_at": "",
-            "updated_at": "",
-            "dismissed": False,
-            "first_seen_at": "",
-        }
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 26, 8, 0, tzinfo=datetime.timezone.utc
+        )
         original = esports_feature.PandaScoreProvider
         esports_feature.PandaScoreProvider = FakeSyncProvider
+        FakeSyncProvider.cancel_existing = False
         try:
-            await plugin._sync_esports_once("测试")
+            await plugin._sync_esports_once("首次同步")
+            match = plugin._get_esports_store()["matches"]["pandascore:lol:555001"]
+            await anext(
+                plugin.esports_bet(
+                    FakeEvent(f"/竞猜 {match['display_id']} 1 100")
+                )
+            )
+            FakeSyncProvider.cancel_existing = True
+            await plugin._sync_esports_once("取消同步")
         finally:
+            FakeSyncProvider.cancel_existing = False
             esports_feature.PandaScoreProvider = original
 
-        self.assertNotIn("pandascore:lol:424242", store["candidates"])
+        store = plugin._get_esports_store()
+        match = store["matches"]["pandascore:lol:555001"]
+        bet = store["bets"][plugin._bet_key(match["id"], "123")]
+        self.assertEqual(match["status"], "refunded")
+        self.assertEqual(bet["status"], "refunded")
+        self.assertEqual(plugin.data["users"]["123"]["points"], 1000)
 
 
 if __name__ == "__main__":

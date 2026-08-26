@@ -607,12 +607,6 @@
         "hint": "可填写 lol 和 valorant。",
         "default": ["lol", "valorant"]
       },
-      "tracked_competitions": {
-        "description": "额外缩小赛事范围",
-        "type": "list",
-        "hint": "插件已固定只收录 LoL 的 LPL/LCK/先锋赛/MSI/全球总决赛，以及无畏契约 VCT 四大赛区/Masters/Champions。通常留空；填写后仅在这些一线赛事中进一步按关键词筛选。",
-        "default": []
-      },
       "sync_interval_minutes": {
         "description": "自动同步间隔（分钟）",
         "type": "int",

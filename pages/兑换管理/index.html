@@ -147,7 +147,6 @@
             <div class="esports-form-grid">
               <label class="esports-field"><span>PandaScore Token</span><input id="esportsToken" type="password" autocomplete="off" placeholder="留空则保持现有 Token" /></label>
               <label class="esports-field"><span>同步间隔（分钟）</span><input id="esportsSyncInterval" type="number" min="2" inputmode="numeric" /></label>
-              <label class="esports-field full"><span>额外缩小赛事范围（可选）</span><textarea id="esportsCompetitions" rows="4" placeholder="通常留空；需要缩小时每行一个关键词"></textarea><small>默认仅收录 LoL：LPL、LCK、先锋赛、MSI、全球总决赛；无畏契约：VCT 四大赛区、Masters、Champions。</small></label>
             </div>
             <div class="esports-switches">
               <label><input id="esportsEnabled" type="checkbox" /><span>启用竞猜</span></label>
@@ -169,27 +168,9 @@
           </section>
         </div>
 
-        <section class="esports-card esports-table-card" aria-labelledby="candidateTitle">
-          <div class="esports-card-heading">
-            <div><span class="section-kicker">数据源候选</span><h3 id="candidateTitle">候选比赛</h3><p>符合一线赛事白名单、但未命中自定义关键词的比赛，可勾选加入竞猜。<span id="esportsCandidateSummary"></span></p></div>
-            <div class="esports-candidate-tools">
-              <label class="esports-toggle" title="显示被忽略的候选比赛"><input id="esportsCandidateDismissed" type="checkbox" /><span>显示已忽略</span></label>
-              <label class="search-box esports-search"><i data-lucide="search"></i><input id="esportsCandidateSearch" type="search" placeholder="搜索赛事或队伍" autocomplete="off" /></label>
-            </div>
-          </div>
-          <div class="esports-candidate-bar" id="esportsCandidateBar" hidden>
-            <span id="esportsCandidateSelectedLabel">已选 0 场</span>
-            <div class="esports-candidate-bar-actions">
-              <button id="esportsIncludeSelected" class="compact-button accent" type="button"><i data-lucide="plus"></i><span>加入所选</span></button>
-              <button id="esportsDismissSelected" class="compact-button" type="button"><i data-lucide="eye-off"></i><span>忽略所选</span></button>
-            </div>
-          </div>
-          <div class="esports-table-wrap"><table class="esports-table candidates-table"><thead><tr><th class="check-col"><input id="esportsCandidateAll" type="checkbox" aria-label="全选候选比赛" /></th><th>比赛</th><th>开赛时间</th><th>状态</th><th>操作</th></tr></thead><tbody id="esportsCandidateRows"></tbody></table></div>
-        </section>
-
         <section class="esports-card esports-table-card" aria-labelledby="matchManagementTitle">
-          <div class="esports-card-heading"><div><span class="section-kicker">比赛管理</span><h3 id="matchManagementTitle">比赛与结算</h3></div><label class="search-box esports-search"><i data-lucide="search"></i><input id="esportsMatchSearch" type="search" placeholder="搜索编号、赛事或队伍" autocomplete="off" /></label></div>
-          <div class="esports-table-wrap"><table class="esports-table"><thead><tr><th>比赛</th><th>开赛时间</th><th>模型倍率 / 投注</th><th>状态</th><th>操作</th></tr></thead><tbody id="esportsMatchRows"></tbody></table></div>
+          <div class="esports-card-heading"><div><span class="section-kicker">比赛管理</span><h3 id="matchManagementTitle">比赛与结算</h3></div><div class="esports-match-tools"><div class="esports-game-filter" role="group" aria-label="按游戏筛选比赛"><button class="active" type="button" data-esports-game-filter="" aria-pressed="true">全部</button><button type="button" data-esports-game-filter="lol" aria-pressed="false">英雄联盟</button><button type="button" data-esports-game-filter="valorant" aria-pressed="false">无畏契约</button></div><label class="search-box esports-search"><i data-lucide="search"></i><input id="esportsMatchSearch" type="search" placeholder="搜索编号、赛事或队伍" autocomplete="off" /></label></div></div>
+          <div class="esports-table-wrap"><table class="esports-table matches-table"><thead><tr><th>比赛</th><th>开赛时间</th><th>模型倍率 / 投注</th><th>状态</th><th>操作</th></tr></thead><tbody id="esportsMatchRows"></tbody></table></div>
         </section>
 
         <section class="esports-card esports-table-card" aria-labelledby="recentBetsTitle">
