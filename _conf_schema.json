@@ -592,7 +592,6 @@
       "provider": {
         "description": "赛事数据源",
         "type": "string",
-        "hint": "首版支持 pandascore。",
         "default": "pandascore"
       },
       "pandascore_token": {
@@ -832,3 +831,4 @@
     }
   }
 }
+
