@@ -39,6 +39,8 @@ OPEN_MATCH_STATUSES = {"not_started", "running"}
 REFUND_MATCH_STATUSES = {"canceled", "cancelled", "postponed", "abandoned"}
 TERMINAL_MATCH_STATUSES = REFUND_MATCH_STATUSES | {"finished", "settled", "refunded"}
 MATCH_RESULT_RETENTION_HOURS = 24
+ELO_CONFIDENCE_FULL_GAMES = 10.0
+ELO_CONFIDENCE_PRIOR_GAMES = 2.0
 
 
 class EsportsPredictionMixin:
@@ -498,6 +500,17 @@ class EsportsPredictionMixin:
         rating_a = float(first.get("rating", 1500.0))
         rating_b = float(second.get("rating", 1500.0))
         probability_a = 1.0 / (1.0 + math.pow(10.0, (rating_b - rating_a) / 400.0))
+        games_a = self._normalize_int(first.get("games"), 0, 0)
+        games_b = self._normalize_int(second.get("games"), 0, 0)
+        confidence = min(
+            1.0,
+            math.sqrt(
+                (games_a + ELO_CONFIDENCE_PRIOR_GAMES)
+                * (games_b + ELO_CONFIDENCE_PRIOR_GAMES)
+            )
+            / ELO_CONFIDENCE_FULL_GAMES,
+        )
+        probability_a = 0.5 + (probability_a - 0.5) * confidence
         min_probability = settings["min_probability"]
         probability_a = min(max(probability_a, min_probability), 1.0 - min_probability)
         probability_b = 1.0 - probability_a

@@ -217,6 +217,45 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         stored = plugin.data["esports"]["matches"][match["id"]]
         self.assertEqual(stored["odds"], original_odds)
 
+    async def test_model_odds_follow_elo_strength(self):
+        plugin = build_plugin()
+        match = add_future_match(plugin)
+        first = plugin._get_team_rating_locked("lol", match["teams"][0])
+        second = plugin._get_team_rating_locked("lol", match["teams"][1])
+        first.update({"rating": 1700.0, "games": 12})
+        second.update({"rating": 1500.0, "games": 12})
+
+        plugin._calculate_match_odds_locked(match)
+
+        first_id = match["teams"][0]["id"]
+        second_id = match["teams"][1]["id"]
+        self.assertGreater(match["probabilities"][first_id], 0.7)
+        self.assertAlmostEqual(
+            match["probabilities"][first_id]
+            + match["probabilities"][second_id],
+            1.0,
+        )
+        self.assertLess(match["odds"][first_id], match["odds"][second_id])
+
+    async def test_model_shrinks_small_samples_toward_even(self):
+        plugin = build_plugin()
+        match = add_future_match(plugin)
+        first = plugin._get_team_rating_locked("lol", match["teams"][0])
+        second = plugin._get_team_rating_locked("lol", match["teams"][1])
+        first.update({"rating": 1900.0, "games": 0})
+        second.update({"rating": 1500.0, "games": 0})
+
+        plugin._calculate_match_odds_locked(match)
+        first_id = match["teams"][0]["id"]
+        cold_probability = match["probabilities"][first_id]
+        first["games"] = 12
+        second["games"] = 12
+        plugin._calculate_match_odds_locked(match)
+
+        self.assertGreater(cold_probability, 0.5)
+        self.assertLess(cold_probability, 0.6)
+        self.assertGreater(match["probabilities"][first_id], 0.85)
+
     async def test_provider_stops_pagination_after_short_page(self):
         provider = PandaScoreProvider("test-token")
         calls = []
