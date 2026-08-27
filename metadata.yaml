@@ -2,7 +2,7 @@ name: astrbot_plugin_point_system
 display_name: 赛事积分竞猜
 author: menglimi
 description: 面向 AstrBot 群聊的积分互动与电竞竞猜插件，支持签到、活跃、抽奖、兑换、LoL/VALORANT 胜者竞猜、模型倍率和自动结算。
-version: 2.4.5
+version: 2.4.6
 repo: https://github.com/PurLango/astrbot_plugin_esports_prediction
 astrbot_version: ">=4.22.0"
 pages:

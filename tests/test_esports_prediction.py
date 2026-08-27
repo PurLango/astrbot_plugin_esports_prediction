@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import asyncio
+import copy
 import datetime
 import unittest
 from types import SimpleNamespace
@@ -64,6 +65,57 @@ def add_future_match(plugin, hours=3):
 
 
 class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_today_matches_use_readable_multiline_blocks(self):
+        plugin = build_plugin()
+        match = add_future_match(plugin)
+
+        reply = await anext(plugin.esports_matches(FakeEvent("/今日赛事")))
+
+        self.assertIn(f"【{match['display_id']}｜LoL】\n", reply)
+        self.assertIn("时间：", reply)
+        self.assertIn("\n赛事：LPL 测试赛", reply)
+        self.assertIn("\n对阵：BLG ", reply)
+        self.assertIn(" vs TES ", reply)
+        self.assertIn("\n\n竞猜：/竞猜 ", reply)
+        self.assertIn("\n详情：/赛事详情 ", reply)
+
+    async def test_match_ids_are_short_and_legacy_ids_remain_resolvable(self):
+        plugin = build_plugin()
+        first = plugin._create_manual_match_locked(
+            "lol", "LPL", "BLG", "TES", "2026-09-01 19:00"
+        )
+        second = plugin._create_manual_match_locked(
+            "lol", "LCK", "GEN", "T1", "2026-09-02 19:00"
+        )
+        raw = copy.deepcopy(plugin.data["esports"])
+        raw.pop("display_sequences", None)
+        first_raw = raw["matches"][first["id"]]
+        second_raw = raw["matches"][second["id"]]
+        first_raw["display_id"] = "L1629296"
+        second_raw["display_id"] = "L1643087"
+
+        normalized = plugin._normalize_esports_store(raw)
+        plugin.data["esports"] = normalized
+
+        self.assertEqual(normalized["matches"][first["id"]]["display_id"], "L001")
+        self.assertEqual(normalized["matches"][second["id"]]["display_id"], "L002")
+        self.assertIs(
+            plugin._resolve_match_locked("L1629296"),
+            normalized["matches"][first["id"]],
+        )
+        self.assertIs(
+            plugin._resolve_match_locked("L1643087"),
+            normalized["matches"][second["id"]],
+        )
+        next_lol = plugin._create_manual_match_locked(
+            "lol", "LPL", "AL", "WBG", "2026-09-03 19:00"
+        )
+        first_valorant = plugin._create_manual_match_locked(
+            "valorant", "VCT", "EDG", "PRX", "2026-09-04 19:00"
+        )
+        self.assertEqual(next_lol["display_id"], "L003")
+        self.assertEqual(first_valorant["display_id"], "V001")
+
     async def test_today_matches_are_supplemented_with_nearby_open_matches(self):
         plugin = build_plugin()
         plugin._utcnow = lambda: datetime.datetime(

@@ -50,6 +50,7 @@ class EsportsPredictionMixin:
             "bets": {},
             "ratings": {},
             "rating_processed_match_ids": [],
+            "display_sequences": {"lol": 0, "valorant": 0, "other": 0},
             "sync": {
                 "last_attempt_at": "",
                 "last_success_at": "",
@@ -71,6 +72,25 @@ class EsportsPredictionMixin:
                 normalized = self._normalize_esports_match_record(raw_match, raw_id)
                 if normalized:
                     store["matches"][normalized["id"]] = normalized
+
+        raw_sequences = raw.get("display_sequences")
+        if isinstance(raw_sequences, dict):
+            for scope in store["display_sequences"]:
+                store["display_sequences"][scope] = self._normalize_int(
+                    raw_sequences.get(scope), 0, 0
+                )
+            self._refresh_match_display_sequences(
+                store["matches"], store["display_sequences"]
+            )
+            for match in self._sorted_matches_for_display_id(store["matches"]):
+                if not match.get("display_id"):
+                    match["display_id"] = self._allocate_match_display_id(
+                        match, store["matches"], store["display_sequences"]
+                    )
+        else:
+            self._renumber_match_display_ids(
+                store["matches"], store["display_sequences"]
+            )
 
         raw_bets = raw.get("bets", {})
         if isinstance(raw_bets, dict):
@@ -157,6 +177,13 @@ class EsportsPredictionMixin:
         normalized = {
             "id": match_id,
             "display_id": str(raw_match.get("display_id", "") or "").strip()[:24],
+            "legacy_display_ids": [
+                str(item).strip()[:24]
+                for item in raw_match.get("legacy_display_ids", [])
+                if str(item).strip()
+            ][-10:]
+            if isinstance(raw_match.get("legacy_display_ids", []), list)
+            else [],
             "source": str(raw_match.get("source", "manual") or "manual").strip()[:40],
             "source_id": str(raw_match.get("source_id", "") or "").strip()[:80],
             "game": str(raw_match.get("game", "") or "").strip().lower()[:20],
@@ -202,8 +229,6 @@ class EsportsPredictionMixin:
             "created_at": str(raw_match.get("created_at", "") or "").strip()[:40],
             "updated_at": str(raw_match.get("updated_at", "") or "").strip()[:40],
         }
-        if not normalized["display_id"]:
-            normalized["display_id"] = self._make_match_display_id(normalized)
         return normalized
 
     def _get_esports_settings(self) -> Dict[str, Any]:
@@ -299,21 +324,93 @@ class EsportsPredictionMixin:
             self.data["esports"] = raw
         return raw
 
-    def _make_match_display_id(self, match: Dict[str, Any]) -> str:
-        raw_source_id = re.sub(r"\D", "", str(match.get("source_id", "")))
-        prefix = "L" if match.get("game") == "lol" else "V" if match.get("game") == "valorant" else "M"
-        return f"{prefix}{raw_source_id[-7:]}" if raw_source_id else f"{prefix}{uuid.uuid4().hex[:7].upper()}"
+    @staticmethod
+    def _match_display_scope(match: Dict[str, Any]) -> str:
+        game = str(match.get("game", "") or "").strip().lower()
+        return game if game in {"lol", "valorant"} else "other"
 
-    def _ensure_unique_display_id(self, match: Dict[str, Any], matches: Dict[str, Any]) -> str:
-        candidate = str(match.get("display_id", "") or self._make_match_display_id(match)).upper()
+    @staticmethod
+    def _match_display_prefix(scope: str) -> str:
+        return {"lol": "L", "valorant": "V"}.get(scope, "M")
+
+    @staticmethod
+    def _sorted_matches_for_display_id(matches: Dict[str, Any]) -> list[Dict[str, Any]]:
+        return sorted(
+            (item for item in matches.values() if isinstance(item, dict)),
+            key=lambda item: (
+                str(item.get("start_time", "") or ""),
+                str(item.get("created_at", "") or ""),
+                str(item.get("id", "") or ""),
+            ),
+        )
+
+    def _refresh_match_display_sequences(
+        self, matches: Dict[str, Any], sequences: Dict[str, int]
+    ) -> None:
+        for match in matches.values():
+            if not isinstance(match, dict):
+                continue
+            scope = self._match_display_scope(match)
+            prefix = self._match_display_prefix(scope)
+            display_id = str(match.get("display_id", "") or "").strip().upper()
+            match_id = re.fullmatch(rf"{re.escape(prefix)}(\d+)", display_id)
+            if match_id:
+                sequences[scope] = max(
+                    self._normalize_int(sequences.get(scope), 0, 0),
+                    int(match_id.group(1)),
+                )
+
+    def _allocate_match_display_id(
+        self,
+        match: Dict[str, Any],
+        matches: Dict[str, Any],
+        sequences: Dict[str, int],
+    ) -> str:
+        scope = self._match_display_scope(match)
+        prefix = self._match_display_prefix(scope)
         used = {
-            str(item.get("display_id", "")).upper()
-            for key, item in matches.items()
-            if key != match.get("id") and isinstance(item, dict)
+            str(item.get("display_id", "") or "").strip().upper()
+            for item in matches.values()
+            if isinstance(item, dict) and item is not match
         }
-        if candidate not in used:
-            return candidate
-        return f"{candidate}{uuid.uuid4().hex[:2].upper()}"
+        number = self._normalize_int(sequences.get(scope), 0, 0) + 1
+        candidate = f"{prefix}{number:03d}"
+        while candidate in used:
+            number += 1
+            candidate = f"{prefix}{number:03d}"
+        sequences[scope] = number
+        return candidate
+
+    def _renumber_match_display_ids(
+        self, matches: Dict[str, Any], sequences: Dict[str, int]
+    ) -> None:
+        ordered = self._sorted_matches_for_display_id(matches)
+        for match in ordered:
+            old_id = str(match.get("display_id", "") or "").strip().upper()
+            legacy_ids = match.setdefault("legacy_display_ids", [])
+            if old_id and old_id not in legacy_ids:
+                legacy_ids.append(old_id)
+            match["display_id"] = ""
+        for scope in sequences:
+            sequences[scope] = 0
+        for match in ordered:
+            match["display_id"] = self._allocate_match_display_id(
+                match, matches, sequences
+            )
+            match["legacy_display_ids"] = [
+                item
+                for item in match.get("legacy_display_ids", [])[-10:]
+                if str(item).upper() != match["display_id"]
+            ]
+
+    def _ensure_unique_display_id(
+        self, match: Dict[str, Any], matches: Dict[str, Any]
+    ) -> str:
+        esports = self._get_esports_store()
+        sequences = esports.setdefault(
+            "display_sequences", {"lol": 0, "valorant": 0, "other": 0}
+        )
+        return self._allocate_match_display_id(match, matches, sequences)
 
     @staticmethod
     def _pandascore_team(raw: Any, fallback: str) -> Dict[str, Any]:
@@ -576,6 +673,7 @@ class EsportsPredictionMixin:
 
         preserved = {
             "display_id": existing.get("display_id", ""),
+            "legacy_display_ids": existing.get("legacy_display_ids", []),
             "odds": existing.get("odds", {}),
             "probabilities": existing.get("probabilities", {}),
             "odds_locked": bool(existing.get("odds_locked", False)),
@@ -606,6 +704,11 @@ class EsportsPredictionMixin:
             values = {
                 str(match.get("display_id", "")).casefold(),
                 str(match.get("source_id", "")).casefold(),
+                *(
+                    str(item).casefold()
+                    for item in match.get("legacy_display_ids", [])
+                    if str(item).strip()
+                ),
             }
             if target in values:
                 return match
@@ -909,10 +1012,18 @@ class EsportsPredictionMixin:
         odds = match.get("odds", {})
         first_name = self._team_display_name(teams[0])
         second_name = self._team_display_name(teams[1])
-        return (
-            f"{match.get('display_id')}｜{self._format_esports_time(match.get('start_time'))}｜"
-            f"{match.get('competition')}｜{first_name} {float(odds.get(teams[0]['id'], 1.0)):.2f} "
-            f"vs {second_name} {float(odds.get(teams[1]['id'], 1.0)):.2f}"
+        game_label = {
+            "lol": "LoL",
+            "valorant": "VALORANT",
+        }.get(str(match.get("game", "")).lower(), "电竞")
+        return "\n".join(
+            [
+                f"【{match.get('display_id')}｜{game_label}】",
+                f"时间：{self._format_esports_time(match.get('start_time'))}",
+                f"赛事：{match.get('competition') or '待定'}",
+                f"对阵：{first_name} {float(odds.get(teams[0]['id'], 1.0)):.2f} "
+                f"vs {second_name} {float(odds.get(teams[1]['id'], 1.0)):.2f}",
+            ]
         )
 
     async def esports_matches(self, event: AstrMessageEvent):
@@ -930,13 +1041,19 @@ class EsportsPredictionMixin:
                 if self._parse_esports_datetime(item.get("start_time")).astimezone(offset).date() == today
             ]
             selected = matches[:10]
-            lines = [self._format_match_line_locked(item) for item in selected]
-        if not lines:
+            blocks = [self._format_match_line_locked(item) for item in selected]
+        if not blocks:
             yield self._plain_result(event, "当前没有已收录的待竞猜赛事。管理员可以先同步或手动添加比赛。")
             return
         title = "今日及近期可竞猜赛事" if today_matches else "近期可竞猜赛事"
-        lines.append("下注：/竞猜 编号 战队缩写 积分；详情：/赛事详情 编号")
-        yield self._plain_result(event, self._single_line_message(f"{title}：\n" + "\n".join(lines)))
+        example_id = selected[0].get("display_id", "编号")
+        message = (
+            f"{title}（{len(blocks)} 场）\n\n"
+            + "\n\n".join(blocks)
+            + f"\n\n竞猜：/竞猜 {example_id} 战队缩写 积分"
+            + f"\n详情：/赛事详情 {example_id}"
+        )
+        yield event.plain_result(message)
 
     async def esports_match_detail(self, event: AstrMessageEvent):
         token = self._get_command_args(event).strip()
