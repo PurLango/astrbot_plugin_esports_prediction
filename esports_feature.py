@@ -51,6 +51,7 @@ class EsportsPredictionMixin:
             "ratings": {},
             "rating_processed_match_ids": [],
             "display_sequences": {"lol": 0, "valorant": 0, "other": 0},
+            "tier_one_league_ids": {"lol": [], "valorant": []},
             "sync": {
                 "last_attempt_at": "",
                 "last_success_at": "",
@@ -145,6 +146,18 @@ class EsportsPredictionMixin:
             store["rating_processed_match_ids"] = [
                 str(item) for item in processed[-5000:] if str(item).strip()
             ]
+        raw_league_ids = raw.get("tier_one_league_ids", {})
+        if isinstance(raw_league_ids, dict):
+            for game in store["tier_one_league_ids"]:
+                values = raw_league_ids.get(game, [])
+                if isinstance(values, list):
+                    store["tier_one_league_ids"][game] = list(
+                        dict.fromkeys(
+                            str(item).strip()
+                            for item in values
+                            if str(item).strip()
+                        )
+                    )
         raw_sync = raw.get("sync", {})
         if isinstance(raw_sync, dict):
             for key in store["sync"]:
@@ -186,6 +199,7 @@ class EsportsPredictionMixin:
             else [],
             "source": str(raw_match.get("source", "manual") or "manual").strip()[:40],
             "source_id": str(raw_match.get("source_id", "") or "").strip()[:80],
+            "league_id": str(raw_match.get("league_id", "") or "").strip()[:40],
             "game": str(raw_match.get("game", "") or "").strip().lower()[:20],
             "competition": str(raw_match.get("competition", "") or "").strip()[:120],
             "stage": str(raw_match.get("stage", "") or "").strip()[:120],
@@ -477,6 +491,7 @@ class EsportsPredictionMixin:
             "display_id": "",
             "source": "pandascore",
             "source_id": source_id,
+            "league_id": str(league.get("id", "") or "").strip(),
             "game": game,
             "competition": competition or "未命名赛事",
             "stage": str(raw.get("name", "") or "").strip()[:120],
@@ -537,6 +552,35 @@ class EsportsPredictionMixin:
             )
             or re.search(r"\bvalorant (?:masters|champions)\b", text)
         )
+
+    def _is_tier_one_league(self, game: str, league: Dict[str, Any]) -> bool:
+        text = self._competition_filter_text(
+            {
+                "_filter_text": " ".join(
+                    [
+                        str(league.get("slug", "") or ""),
+                        str(league.get("name", "") or ""),
+                    ]
+                )
+            }
+        )
+        if not text or any(token in text for token in TIER_ONE_EXCLUSIONS.get(game, ())):
+            return False
+        if game == "lol":
+            return bool(
+                re.search(
+                    r"\b(?:lpl|lck|league of legends pro league|"
+                    r"league of legends champions korea|first stand|fst|"
+                    r"mid season invitational|msi|world championship|worlds)\b",
+                    text,
+                )
+            )
+        if game == "valorant":
+            return bool(
+                re.search(r"\b(?:vct|valorant champions tour)\b", text)
+                or re.search(r"\bvalorant (?:masters|champions)\b", text)
+            )
+        return False
 
     def _is_recent_match_result(
         self, match: Dict[str, Any], now: datetime.datetime | None = None
@@ -859,8 +903,57 @@ class EsportsPredictionMixin:
         attempt_at = self._utcnow().isoformat(timespec="seconds")
         fetched: list[Dict[str, Any]] = []
         errors: list[str] = []
+        target_league_ids: Dict[str, set[str]] = {
+            game: set() for game in settings["games"]
+        }
+        async with self._data_lock:
+            esports = self._get_esports_store()
+            cached_league_ids = esports.setdefault(
+                "tier_one_league_ids", {"lol": [], "valorant": []}
+            )
+            for game in target_league_ids:
+                target_league_ids[game].update(
+                    str(item).strip()
+                    for item in cached_league_ids.get(game, [])
+                    if str(item).strip()
+                )
+            for stored_match in esports.setdefault("matches", {}).values():
+                if not isinstance(stored_match, dict) or not self._is_tier_one_match(stored_match):
+                    continue
+                game = str(stored_match.get("game", "") or "").lower()
+                league_id = str(stored_match.get("league_id", "") or "").strip()
+                if game in target_league_ids and league_id:
+                    target_league_ids[game].add(league_id)
+
+        discovery_requests = [
+            (game, provider.fetch_leagues(game))
+            for game, league_ids in target_league_ids.items()
+            if not league_ids
+        ]
+        discovery_responses = await asyncio.gather(
+            *(item[1] for item in discovery_requests), return_exceptions=True
+        )
+        for (game, _), response in zip(discovery_requests, discovery_responses):
+            if isinstance(response, BaseException):
+                errors.append(f"{game}/leagues: {response}")
+                continue
+            if not isinstance(response, list):
+                errors.append(f"{game}/leagues: 数据格式不符合预期")
+                continue
+            target_league_ids[game].update(
+                str(league.get("id", "") or "").strip()
+                for league in response
+                if isinstance(league, dict)
+                and self._is_tier_one_league(game, league)
+                and str(league.get("id", "") or "").strip()
+            )
+
         requests = []
-        for game in settings["games"]:
+        for game, league_ids in target_league_ids.items():
+            if not league_ids:
+                errors.append(f"{game}/leagues: 未找到允许的赛事")
+                continue
+            allowed_ids = tuple(sorted(league_ids))
             for state in ("past", "running", "upcoming"):
                 requests.append(
                     (
@@ -870,6 +963,7 @@ class EsportsPredictionMixin:
                             game,
                             state,
                             pages=3 if state == "past" else 2 if state == "upcoming" else 1,
+                            league_ids=allowed_ids,
                         ),
                     )
                 )
@@ -910,6 +1004,10 @@ class EsportsPredictionMixin:
         now = self._utcnow()
         async with self._data_lock:
             esports = self._get_esports_store()
+            esports["tier_one_league_ids"] = {
+                game: sorted(league_ids)
+                for game, league_ids in target_league_ids.items()
+            }
             matches = esports.setdefault("matches", {})
             for match in ordered:
                 match_id = match["id"]
@@ -1051,36 +1149,8 @@ class EsportsPredictionMixin:
             f"{title}（{len(blocks)} 场）\n\n"
             + "\n\n".join(blocks)
             + f"\n\n竞猜：/竞猜 {example_id} 战队缩写 积分"
-            + f"\n详情：/赛事详情 {example_id}"
         )
         yield event.plain_result(message)
-
-    async def esports_match_detail(self, event: AstrMessageEvent):
-        token = self._get_command_args(event).strip()
-        async with self._data_lock:
-            match = self._resolve_match_locked(token)
-            if not match:
-                message = "未找到该比赛。用法：/赛事详情 比赛编号"
-            else:
-                teams = match["teams"]
-                odds = match.get("odds", {})
-                probabilities = match.get("probabilities", {})
-                pool = self._match_pool_locked(match["id"])
-                switch_deadline, close_deadline = self._match_deadlines(match)
-                first_name = self._team_display_name(teams[0])
-                second_name = self._team_display_name(teams[1])
-                message = "\n".join(
-                    [
-                        f"{match['display_id']}｜{match['competition']}",
-                        f"开赛：{self._format_esports_time(match['start_time'])}",
-                        f"1. {first_name}｜模型胜率 {float(probabilities.get(teams[0]['id'], .5)):.1%}｜倍率 {float(odds.get(teams[0]['id'], 1)):.2f}｜已投 {pool.get(teams[0]['id'], 0)}",
-                        f"2. {second_name}｜模型胜率 {float(probabilities.get(teams[1]['id'], .5)):.1%}｜倍率 {float(odds.get(teams[1]['id'], 1)):.2f}｜已投 {pool.get(teams[1]['id'], 0)}",
-                        f"改选/撤单截止：{self._format_esports_time(switch_deadline.isoformat() if switch_deadline else '')}",
-                        f"封盘：{self._format_esports_time(close_deadline.isoformat() if close_deadline else '')}",
-                        "倍率由历史赛果的 Elo 模型估算，第一笔下注后锁定。",
-                    ]
-                )
-        yield self._plain_result(event, self._single_line_message(message))
 
     async def esports_bet(self, event: AstrMessageEvent):
         args = self._get_command_args(event).split()

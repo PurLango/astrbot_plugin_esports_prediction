@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 
 import esports_feature
-from main import PointSystemPlugin
+from main import PointSystemPlugin, REGISTERED_COMMAND_NAMES
 from esports_provider import PandaScoreProvider
 
 
@@ -77,7 +77,11 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("\n对阵：BLG ", reply)
         self.assertIn(" vs TES ", reply)
         self.assertIn("\n\n竞猜：/竞猜 ", reply)
-        self.assertIn("\n详情：/赛事详情 ", reply)
+        self.assertNotIn("赛事详情", reply)
+
+    async def test_match_detail_is_not_registered_as_a_chat_command(self):
+        self.assertNotIn("赛事详情", REGISTERED_COMMAND_NAMES)
+        self.assertFalse(hasattr(PointSystemPlugin, "esports_match_detail_command"))
 
     async def test_match_ids_are_short_and_legacy_ids_remain_resolvable(self):
         plugin = build_plugin()
@@ -162,6 +166,42 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(all(plugin._is_tier_one_match(match) for match in accepted))
         self.assertFalse(any(plugin._is_tier_one_match(match) for match in rejected))
+
+    async def test_tier_one_league_discovery_excludes_lower_tiers(self):
+        plugin = build_plugin()
+        accepted = [
+            ("lol", {"name": "LPL", "slug": "lpl"}),
+            ("lol", {"name": "LCK", "slug": "lck"}),
+            ("lol", {"name": "Mid-Season Invitational", "slug": "msi"}),
+            ("lol", {"name": "World Championship", "slug": "worlds"}),
+            (
+                "valorant",
+                {"name": "Valorant Champions Tour 2026", "slug": "vct-2026"},
+            ),
+            ("valorant", {"name": "Valorant Masters", "slug": "masters"}),
+        ]
+        rejected = [
+            ("lol", {"name": "LEC", "slug": "lec"}),
+            (
+                "lol",
+                {"name": "LCK Challengers League", "slug": "lck-challengers"},
+            ),
+            (
+                "valorant",
+                {"name": "VCT Challengers Japan", "slug": "vct-challengers-japan"},
+            ),
+            (
+                "valorant",
+                {"name": "Valorant Game Changers", "slug": "game-changers"},
+            ),
+        ]
+
+        self.assertTrue(
+            all(plugin._is_tier_one_league(game, league) for game, league in accepted)
+        )
+        self.assertFalse(
+            any(plugin._is_tier_one_league(game, league) for game, league in rejected)
+        )
 
     async def test_match_display_and_bet_prefer_official_team_code(self):
         plugin = build_plugin()
@@ -322,12 +362,40 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, [1, 2])
         self.assertEqual(len(result), 102)
 
+    async def test_provider_filters_matches_by_allowed_league_ids(self):
+        provider = PandaScoreProvider("test-token")
+        captured = {}
+
+        def fake_get(_path, params):
+            captured.update(params)
+            return []
+
+        provider._get_json_sync = fake_get
+        await provider.fetch_matches(
+            "lol", "upcoming", league_ids=("9001", "9002")
+        )
+
+        self.assertEqual(captured["filter[league_id]"], "9001,9002")
+
 
 class FakeSyncProvider:
     cancel_existing = False
 
     def __init__(self, token, **kwargs):
         pass
+
+    async def fetch_leagues(self, game, **kwargs):
+        if game == "lol":
+            return [
+                {"id": 9001, "name": "LPL", "slug": "lpl"},
+                {"id": 9002, "name": "LCK", "slug": "lck"},
+                {
+                    "id": 9999,
+                    "name": "LCK Challengers League",
+                    "slug": "lck-challengers",
+                },
+            ]
+        return []
 
     async def fetch_matches(self, game, state, **kwargs):
         if game != "lol":
@@ -402,7 +470,78 @@ class FakeSyncProvider:
         ]
 
 
+class TargetedHistoryProvider:
+    calls = []
+
+    def __init__(self, token, **kwargs):
+        pass
+
+    async def fetch_leagues(self, game, **kwargs):
+        if game == "lol":
+            return [{"id": 9001, "name": "LPL", "slug": "lpl"}]
+        return []
+
+    async def fetch_matches(self, game, state, **kwargs):
+        league_ids = tuple(str(item) for item in kwargs.get("league_ids", []))
+        self.calls.append((game, state, league_ids))
+        if game != "lol":
+            return []
+        if state == "upcoming":
+            return [
+                {
+                    "id": 880001,
+                    "status": "not_started",
+                    "begin_at": "2026-08-28T12:00:00Z",
+                    "opponents": [
+                        {"id": 101, "name": "Strong", "acronym": "STR"},
+                        {"id": 102, "name": "Weak", "acronym": "WEK"},
+                    ],
+                    "league": {"id": 9001, "name": "LPL", "slug": "lpl"},
+                    "serie": {"name": "Summer 2026"},
+                }
+            ]
+        if state == "past" and league_ids == ("9001",):
+            return [
+                {
+                    "id": 880100 + index,
+                    "status": "finished",
+                    "begin_at": f"2026-08-{10 + index:02d}T12:00:00Z",
+                    "end_at": f"2026-08-{10 + index:02d}T13:00:00Z",
+                    "winner_id": 101,
+                    "opponents": [
+                        {"id": 101, "name": "Strong", "acronym": "STR"},
+                        {"id": 102, "name": "Weak", "acronym": "WEK"},
+                    ],
+                    "league": {"id": 9001, "name": "LPL", "slug": "lpl"},
+                    "serie": {"name": "Summer 2026"},
+                }
+                for index in range(8)
+            ]
+        return []
+
+
 class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sync_fetches_target_league_history_before_pricing(self):
+        plugin = build_plugin()
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 26, 8, 0, tzinfo=datetime.timezone.utc
+        )
+        original = esports_feature.PandaScoreProvider
+        esports_feature.PandaScoreProvider = TargetedHistoryProvider
+        TargetedHistoryProvider.calls = []
+        try:
+            await plugin._sync_esports_once("测试历史赔率")
+        finally:
+            esports_feature.PandaScoreProvider = original
+
+        self.assertIn(("lol", "past", ("9001",)), TargetedHistoryProvider.calls)
+        self.assertTrue(all(call[2] for call in TargetedHistoryProvider.calls))
+        match = plugin._get_esports_store()["matches"]["pandascore:lol:880001"]
+        first_id = match["teams"][0]["id"]
+        second_id = match["teams"][1]["id"]
+        self.assertGreater(match["probabilities"][first_id], 0.5)
+        self.assertNotEqual(match["odds"][first_id], match["odds"][second_id])
+
     async def test_sync_stores_only_filtered_matches_and_recent_results(self):
         plugin = build_plugin()
         plugin._utcnow = lambda: datetime.datetime(

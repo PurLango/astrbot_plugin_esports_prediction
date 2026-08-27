@@ -69,6 +69,7 @@ class PandaScoreProvider:
         *,
         page_size: int = 100,
         pages: int = 1,
+        league_ids: list[str] | tuple[str, ...] | None = None,
     ) -> list[dict[str, Any]]:
         normalized_game = str(game or "").strip().lower()
         if normalized_game not in {"lol", "valorant"}:
@@ -78,18 +79,56 @@ class PandaScoreProvider:
             raise EsportsProviderError(f"不支持的数据源比赛状态：{state}")
 
         sort = "-begin_at" if normalized_state == "past" else "begin_at"
+        normalized_league_ids = list(
+            dict.fromkeys(
+                str(item).strip()
+                for item in (league_ids or [])
+                if str(item).strip()
+            )
+        )
         result: list[dict[str, Any]] = []
         for page_number in range(1, max(1, min(int(pages), 5)) + 1):
+            params = {
+                "page[size]": max(1, min(int(page_size), 100)),
+                "page[number]": page_number,
+                "sort": sort,
+            }
+            if normalized_league_ids:
+                params["filter[league_id]"] = ",".join(normalized_league_ids)
             page = await asyncio.to_thread(
                 self._get_json_sync,
                 f"/{normalized_game}/matches/{normalized_state}",
-                {
-                    "page[size]": max(1, min(int(page_size), 100)),
-                    "page[number]": page_number,
-                    "sort": sort,
-                },
+                params,
             )
             result.extend(page)
             if len(page) < max(1, min(int(page_size), 100)):
+                break
+        return result
+
+    async def fetch_leagues(
+        self,
+        game: str,
+        *,
+        page_size: int = 100,
+        pages: int = 5,
+    ) -> list[dict[str, Any]]:
+        normalized_game = str(game or "").strip().lower()
+        if normalized_game not in {"lol", "valorant"}:
+            raise EsportsProviderError(f"不支持的数据源游戏类型：{game}")
+
+        result: list[dict[str, Any]] = []
+        size = max(1, min(int(page_size), 100))
+        for page_number in range(1, max(1, min(int(pages), 5)) + 1):
+            page = await asyncio.to_thread(
+                self._get_json_sync,
+                f"/{normalized_game}/leagues",
+                {
+                    "page[size]": size,
+                    "page[number]": page_number,
+                    "sort": "name",
+                },
+            )
+            result.extend(page)
+            if len(page) < size:
                 break
         return result
