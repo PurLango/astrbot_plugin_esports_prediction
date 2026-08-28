@@ -544,14 +544,15 @@ class EsportsPredictionMixin:
                     text,
                 )
             )
-        return bool(
-            re.search(
-                r"\b(?:vct|(?:valorant )?champions tour)(?: 20\d{2})? "
-                r"(?:americas|emea|pacific|china|cn|masters|champions)\b",
-                text,
-            )
-            or re.search(r"\bvalorant (?:masters|champions)\b", text)
+        has_vct = re.search(r"\b(?:vct|valorant champions tour)\b", text)
+        has_main_scope = re.search(
+            r"\b(?:americas|emea|pacific|china|cn|masters|champions)\b",
+            text,
         )
+        standalone_global = re.search(
+            r"\bvalorant (?:masters|champions)(?! tour)\b", text
+        )
+        return bool((has_vct and has_main_scope) or standalone_global)
 
     def _is_tier_one_league(self, game: str, league: Dict[str, Any]) -> bool:
         text = self._competition_filter_text(
@@ -926,9 +927,7 @@ class EsportsPredictionMixin:
                     target_league_ids[game].add(league_id)
 
         discovery_requests = [
-            (game, provider.fetch_leagues(game))
-            for game, league_ids in target_league_ids.items()
-            if not league_ids
+            (game, provider.fetch_leagues(game)) for game in target_league_ids
         ]
         discovery_responses = await asyncio.gather(
             *(item[1] for item in discovery_requests), return_exceptions=True
@@ -940,13 +939,15 @@ class EsportsPredictionMixin:
             if not isinstance(response, list):
                 errors.append(f"{game}/leagues: 数据格式不符合预期")
                 continue
-            target_league_ids[game].update(
+            discovered_ids = {
                 str(league.get("id", "") or "").strip()
                 for league in response
                 if isinstance(league, dict)
                 and self._is_tier_one_league(game, league)
                 and str(league.get("id", "") or "").strip()
-            )
+            }
+            if discovered_ids:
+                target_league_ids[game] = discovered_ids
 
         requests = []
         for game, league_ids in target_league_ids.items():
@@ -1165,6 +1166,12 @@ class EsportsPredictionMixin:
                 "查看记录：/我的竞猜",
                 "查看排行：/竞猜排行",
                 "查看规则：/竞猜规则",
+                "",
+                "积分相关",
+                "签到：/群聊签到",
+                "查看积分：/我的积分",
+                "积分排行：/积分榜",
+                "积分规则：/积分规则",
             ]
         )
 

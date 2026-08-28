@@ -75,6 +75,10 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/竞猜 L001 TES 100", reply)
         self.assertIn("/改选 L001 BLG", reply)
         self.assertIn("/撤销竞猜 L001", reply)
+        self.assertIn("/群聊签到", reply)
+        self.assertIn("/我的积分", reply)
+        self.assertIn("/积分榜", reply)
+        self.assertIn("/积分规则", reply)
 
     async def test_esports_prediction_help_is_registered_as_a_chat_command(self):
         self.assertIn("赛事竞猜", REGISTERED_COMMAND_NAMES)
@@ -195,6 +199,10 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
             {"game": "valorant", "_filter_text": "vct 2026 china stage 2"},
             {"game": "valorant", "_filter_text": "vct 2026 masters london"},
             {"game": "valorant", "_filter_text": "valorant champions 2026"},
+            {
+                "game": "valorant",
+                "_filter_text": "vct 2026 stage 2 pacific",
+            },
         ]
         rejected = [
             {"game": "lol", "_filter_text": "lck challengers league 2026"},
@@ -418,6 +426,21 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(captured["filter[league_id]"], "9001,9002")
 
+    async def test_provider_discovers_valorant_leagues_with_targeted_searches(self):
+        provider = PandaScoreProvider("test-token")
+        searches = []
+
+        def fake_get(_path, params):
+            searches.append(params.get("search[name]"))
+            return []
+
+        provider._get_json_sync = fake_get
+        await provider.fetch_leagues("valorant")
+
+        self.assertIn("VCT", searches)
+        self.assertIn("Valorant Champions Tour", searches)
+        self.assertNotIn(None, searches)
+
 
 class FakeSyncProvider:
     cancel_existing = False
@@ -562,6 +585,73 @@ class TargetedHistoryProvider:
 
 
 class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sync_refreshes_cached_valorant_leagues_and_keeps_vct_match(self):
+        class CurrentVctProvider:
+            calls = []
+
+            def __init__(self, token, **kwargs):
+                pass
+
+            async def fetch_leagues(self, game, **kwargs):
+                self.calls.append((game, "leagues", ()))
+                if game == "valorant":
+                    return [
+                        {
+                            "id": 7701,
+                            "name": "Valorant Champions Tour 2026",
+                            "slug": "valorant-champions-tour-2026",
+                        }
+                    ]
+                return [{"id": 9001, "name": "LPL", "slug": "lpl"}]
+
+            async def fetch_matches(self, game, state, **kwargs):
+                league_ids = tuple(
+                    str(item) for item in kwargs.get("league_ids", [])
+                )
+                self.calls.append((game, state, league_ids))
+                if (
+                    game != "valorant"
+                    or state != "upcoming"
+                    or "7701" not in league_ids
+                ):
+                    return []
+                return [
+                    {
+                        "id": 770001,
+                        "status": "not_started",
+                        "begin_at": "2026-08-29T12:00:00Z",
+                        "opponents": [
+                            {"id": 701, "name": "Rex Regum Qeon", "acronym": "RRQ"},
+                            {"id": 702, "name": "Paper Rex", "acronym": "PRX"},
+                        ],
+                        "league": {
+                            "id": 7701,
+                            "name": "Valorant Champions Tour 2026",
+                            "slug": "valorant-champions-tour-2026",
+                        },
+                        "serie": {"name": "2026: Stage 2 - Pacific"},
+                    }
+                ]
+
+        plugin = build_plugin()
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 28, 0, 0, tzinfo=datetime.timezone.utc
+        )
+        plugin._get_esports_store()["tier_one_league_ids"]["valorant"] = ["7600"]
+        original = esports_feature.PandaScoreProvider
+        esports_feature.PandaScoreProvider = CurrentVctProvider
+        CurrentVctProvider.calls = []
+        try:
+            await plugin._sync_esports_once("刷新 VCT 联赛")
+        finally:
+            esports_feature.PandaScoreProvider = original
+
+        self.assertIn(("valorant", "leagues", ()), CurrentVctProvider.calls)
+        self.assertIn(
+            "pandascore:valorant:770001",
+            plugin._get_esports_store()["matches"],
+        )
+
     async def test_sync_fetches_target_league_history_before_pricing(self):
         plugin = build_plugin()
         plugin._utcnow = lambda: datetime.datetime(

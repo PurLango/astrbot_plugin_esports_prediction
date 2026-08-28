@@ -10,6 +10,23 @@ from typing import Any
 
 
 PANDASCORE_BASE_URL = "https://api.pandascore.co"
+LEAGUE_SEARCH_TERMS = {
+    "lol": (
+        "LPL",
+        "LCK",
+        "First Stand",
+        "MSI",
+        "Mid-Season Invitational",
+        "World Championship",
+        "Worlds",
+    ),
+    "valorant": (
+        "VCT",
+        "Valorant Champions Tour",
+        "Valorant Masters",
+        "Valorant Champions",
+    ),
+}
 
 
 class EsportsProviderError(RuntimeError):
@@ -110,7 +127,7 @@ class PandaScoreProvider:
         game: str,
         *,
         page_size: int = 100,
-        pages: int = 5,
+        pages: int = 2,
     ) -> list[dict[str, Any]]:
         normalized_game = str(game or "").strip().lower()
         if normalized_game not in {"lol", "valorant"}:
@@ -118,17 +135,31 @@ class PandaScoreProvider:
 
         result: list[dict[str, Any]] = []
         size = max(1, min(int(page_size), 100))
-        for page_number in range(1, max(1, min(int(pages), 5)) + 1):
-            page = await asyncio.to_thread(
-                self._get_json_sync,
-                f"/{normalized_game}/leagues",
-                {
-                    "page[size]": size,
-                    "page[number]": page_number,
-                    "sort": "name",
-                },
-            )
-            result.extend(page)
-            if len(page) < size:
-                break
-        return result
+        for search_term in LEAGUE_SEARCH_TERMS[normalized_game]:
+            for page_number in range(1, max(1, min(int(pages), 5)) + 1):
+                page = await asyncio.to_thread(
+                    self._get_json_sync,
+                    f"/{normalized_game}/leagues",
+                    {
+                        "page[size]": size,
+                        "page[number]": page_number,
+                        "search[name]": search_term,
+                        "sort": "name",
+                    },
+                )
+                result.extend(page)
+                if len(page) < size:
+                    break
+
+        unique: dict[str, dict[str, Any]] = {}
+        for league in result:
+            key = str(league.get("id", "") or "").strip()
+            if not key:
+                key = "|".join(
+                    (
+                        str(league.get("slug", "") or "").strip(),
+                        str(league.get("name", "") or "").strip(),
+                    )
+                )
+            unique[key] = league
+        return list(unique.values())
