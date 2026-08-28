@@ -75,7 +75,8 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/竞猜 L001 TES 100", reply)
         self.assertIn("/改选 L001 BLG", reply)
         self.assertIn("/撤销竞猜 L001", reply)
-        self.assertIn("/群聊签到", reply)
+        self.assertIn("/签到", reply)
+        self.assertNotIn("/群聊签到", reply)
         self.assertIn("/我的积分", reply)
         self.assertIn("/积分榜", reply)
         self.assertIn("/积分规则", reply)
@@ -83,6 +84,10 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
     async def test_esports_prediction_help_is_registered_as_a_chat_command(self):
         self.assertIn("赛事竞猜", REGISTERED_COMMAND_NAMES)
         self.assertTrue(hasattr(PointSystemPlugin, "esports_help_command"))
+
+    async def test_sign_in_command_uses_short_name(self):
+        self.assertIn("签到", REGISTERED_COMMAND_NAMES)
+        self.assertNotIn("群聊签到", REGISTERED_COMMAND_NAMES)
 
     async def test_today_matches_use_readable_multiline_blocks(self):
         plugin = build_plugin()

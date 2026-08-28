@@ -79,7 +79,7 @@ REGISTERED_COMMAND_NAMES = (
     "兑换",
     "记录生日",
     "生日签到",
-    "群聊签到",
+    "签到",
     "我的积分",
     "积分规则",
     "积分榜",
@@ -114,7 +114,7 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "赛事积分竞猜是一个面向 AstrBot 群聊的电竞赛事竞猜与积分互动插件，支持 LoL、VALORANT 赛程同步、动态倍率、积分下注、自动结算，以及签到、抽奖和兑换等积分功能。",
-    "2.4.9",
+    "2.4.10",
     "https://github.com/PurLango/astrbot_plugin_esports_prediction",
 )
 class PointSystemPlugin(
@@ -2905,7 +2905,7 @@ class PointSystemPlugin(
             )
         )
 
-    @filter.command("群聊签到")
+    @filter.command("签到")
     async def sign_in(self, event: AstrMessageEvent):
         """每日签到以获取积分奖励。"""
         async for result in self._handle_sign_in(event):
