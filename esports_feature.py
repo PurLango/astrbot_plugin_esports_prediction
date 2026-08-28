@@ -32,6 +32,10 @@ TIER_ONE_EXCLUSIONS = {
         "challenger",
         "collegiate",
         "game changers",
+        "off season",
+        "offseason",
+        "qualifier",
+        "showmatch",
     ),
 }
 FINISHED_BET_STATUSES = {"won", "lost", "refunded"}
@@ -39,6 +43,7 @@ OPEN_MATCH_STATUSES = {"not_started", "running"}
 REFUND_MATCH_STATUSES = {"canceled", "cancelled", "postponed", "abandoned"}
 TERMINAL_MATCH_STATUSES = REFUND_MATCH_STATUSES | {"finished", "settled", "refunded"}
 MATCH_RESULT_RETENTION_HOURS = 24
+LEAGUE_DISCOVERY_REFRESH_HOURS = 24
 ELO_CONFIDENCE_FULL_GAMES = 10.0
 ELO_CONFIDENCE_PRIOR_GAMES = 2.0
 
@@ -52,6 +57,7 @@ class EsportsPredictionMixin:
             "rating_processed_match_ids": [],
             "display_sequences": {"lol": 0, "valorant": 0, "other": 0},
             "tier_one_league_ids": {"lol": [], "valorant": []},
+            "tier_one_leagues_refreshed_at": {"lol": "", "valorant": ""},
             "sync": {
                 "last_attempt_at": "",
                 "last_success_at": "",
@@ -158,6 +164,12 @@ class EsportsPredictionMixin:
                             if str(item).strip()
                         )
                     )
+        raw_league_refresh = raw.get("tier_one_leagues_refreshed_at", {})
+        if isinstance(raw_league_refresh, dict):
+            for game in store["tier_one_leagues_refreshed_at"]:
+                store["tier_one_leagues_refreshed_at"][game] = str(
+                    raw_league_refresh.get(game, "") or ""
+                )[:40]
         raw_sync = raw.get("sync", {})
         if isinstance(raw_sync, dict):
             for key in store["sync"]:
@@ -545,14 +557,10 @@ class EsportsPredictionMixin:
                 )
             )
         has_vct = re.search(r"\b(?:vct|valorant champions tour)\b", text)
-        has_main_scope = re.search(
-            r"\b(?:americas|emea|pacific|china|cn|masters|champions)\b",
-            text,
-        )
         standalone_global = re.search(
             r"\bvalorant (?:masters|champions)(?! tour)\b", text
         )
-        return bool((has_vct and has_main_scope) or standalone_global)
+        return bool(has_vct or standalone_global)
 
     def _is_tier_one_league(self, game: str, league: Dict[str, Any]) -> bool:
         text = self._competition_filter_text(
@@ -901,22 +909,31 @@ class EsportsPredictionMixin:
             settings["pandascore_token"],
             timeout_seconds=settings["request_timeout_seconds"],
         )
-        attempt_at = self._utcnow().isoformat(timespec="seconds")
+        attempt_time = self._utcnow()
+        attempt_at = attempt_time.isoformat(timespec="seconds")
         fetched: list[Dict[str, Any]] = []
         errors: list[str] = []
         target_league_ids: Dict[str, set[str]] = {
             game: set() for game in settings["games"]
         }
+        league_refresh_times: Dict[str, str] = {}
+        discovery_games: list[str] = []
         async with self._data_lock:
             esports = self._get_esports_store()
             cached_league_ids = esports.setdefault(
                 "tier_one_league_ids", {"lol": [], "valorant": []}
+            )
+            cached_refresh_times = esports.setdefault(
+                "tier_one_leagues_refreshed_at", {"lol": "", "valorant": ""}
             )
             for game in target_league_ids:
                 target_league_ids[game].update(
                     str(item).strip()
                     for item in cached_league_ids.get(game, [])
                     if str(item).strip()
+                )
+                league_refresh_times[game] = str(
+                    cached_refresh_times.get(game, "") or ""
                 )
             for stored_match in esports.setdefault("matches", {}).values():
                 if not isinstance(stored_match, dict) or not self._is_tier_one_match(stored_match):
@@ -926,8 +943,20 @@ class EsportsPredictionMixin:
                 if game in target_league_ids and league_id:
                     target_league_ids[game].add(league_id)
 
+            for game, league_ids in target_league_ids.items():
+                refreshed_at = self._parse_esports_datetime(
+                    league_refresh_times.get(game)
+                )
+                if (
+                    not league_ids
+                    or refreshed_at is None
+                    or attempt_time - refreshed_at
+                    >= datetime.timedelta(hours=LEAGUE_DISCOVERY_REFRESH_HOURS)
+                ):
+                    discovery_games.append(game)
+
         discovery_requests = [
-            (game, provider.fetch_leagues(game)) for game in target_league_ids
+            (game, provider.fetch_leagues(game)) for game in discovery_games
         ]
         discovery_responses = await asyncio.gather(
             *(item[1] for item in discovery_requests), return_exceptions=True
@@ -948,6 +977,7 @@ class EsportsPredictionMixin:
             }
             if discovered_ids:
                 target_league_ids[game] = discovered_ids
+                league_refresh_times[game] = attempt_at
 
         requests = []
         for game, league_ids in target_league_ids.items():
@@ -986,7 +1016,17 @@ class EsportsPredictionMixin:
 
         if not fetched and errors:
             async with self._data_lock:
-                sync = self._get_esports_store().setdefault("sync", {})
+                esports = self._get_esports_store()
+                cached_ids = esports.setdefault(
+                    "tier_one_league_ids", {"lol": [], "valorant": []}
+                )
+                cached_refresh = esports.setdefault(
+                    "tier_one_leagues_refreshed_at", {"lol": "", "valorant": ""}
+                )
+                for game, league_ids in target_league_ids.items():
+                    cached_ids[game] = sorted(league_ids)
+                    cached_refresh[game] = league_refresh_times.get(game, "")
+                sync = esports.setdefault("sync", {})
                 sync["last_attempt_at"] = attempt_at
                 sync["last_error"] = "；".join(errors)[:500]
                 await self._save_data_locked()
@@ -1005,10 +1045,15 @@ class EsportsPredictionMixin:
         now = self._utcnow()
         async with self._data_lock:
             esports = self._get_esports_store()
-            esports["tier_one_league_ids"] = {
-                game: sorted(league_ids)
-                for game, league_ids in target_league_ids.items()
-            }
+            cached_ids = esports.setdefault(
+                "tier_one_league_ids", {"lol": [], "valorant": []}
+            )
+            cached_refresh = esports.setdefault(
+                "tier_one_leagues_refreshed_at", {"lol": "", "valorant": ""}
+            )
+            for game, league_ids in target_league_ids.items():
+                cached_ids[game] = sorted(league_ids)
+                cached_refresh[game] = league_refresh_times.get(game, "")
             matches = esports.setdefault("matches", {})
             for match in ordered:
                 match_id = match["id"]

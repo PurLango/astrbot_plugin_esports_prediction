@@ -133,10 +133,12 @@ class PandaScoreProvider:
         if normalized_game not in {"lol", "valorant"}:
             raise EsportsProviderError(f"不支持的数据源游戏类型：{game}")
 
-        result: list[dict[str, Any]] = []
         size = max(1, min(int(page_size), 100))
-        for search_term in LEAGUE_SEARCH_TERMS[normalized_game]:
-            for page_number in range(1, max(1, min(int(pages), 5)) + 1):
+        page_limit = max(1, min(int(pages), 5))
+
+        async def fetch_search_term(search_term: str) -> list[dict[str, Any]]:
+            matches: list[dict[str, Any]] = []
+            for page_number in range(1, page_limit + 1):
                 page = await asyncio.to_thread(
                     self._get_json_sync,
                     f"/{normalized_game}/leagues",
@@ -147,9 +149,18 @@ class PandaScoreProvider:
                         "sort": "name",
                     },
                 )
-                result.extend(page)
+                matches.extend(page)
                 if len(page) < size:
                     break
+            return matches
+
+        pages_by_term = await asyncio.gather(
+            *(
+                fetch_search_term(search_term)
+                for search_term in LEAGUE_SEARCH_TERMS[normalized_game]
+            )
+        )
+        result = [league for page in pages_by_term for league in page]
 
         unique: dict[str, dict[str, Any]] = {}
         for league in result:

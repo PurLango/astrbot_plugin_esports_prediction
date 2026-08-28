@@ -2,6 +2,8 @@
 import asyncio
 import copy
 import datetime
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 
@@ -204,6 +206,11 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
             {"game": "valorant", "_filter_text": "vct 2026 china stage 2"},
             {"game": "valorant", "_filter_text": "vct 2026 masters london"},
             {"game": "valorant", "_filter_text": "valorant champions 2026"},
+            {
+                "game": "valorant",
+                "_filter_text": "valorant champions tour 2026 regular season",
+            },
+            {"game": "valorant", "_filter_text": "vct 2026 regular season"},
             {
                 "game": "valorant",
                 "_filter_text": "vct 2026 stage 2 pacific",
@@ -446,6 +453,27 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Valorant Champions Tour", searches)
         self.assertNotIn(None, searches)
 
+    async def test_provider_discovers_leagues_concurrently(self):
+        provider = PandaScoreProvider("test-token")
+        lock = threading.Lock()
+        active = 0
+        max_active = 0
+
+        def fake_get(_path, _params):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return []
+
+        provider._get_json_sync = fake_get
+        await provider.fetch_leagues("valorant", pages=1)
+
+        self.assertGreater(max_active, 1)
+
 
 class FakeSyncProvider:
     cancel_existing = False
@@ -648,6 +676,10 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
         CurrentVctProvider.calls = []
         try:
             await plugin._sync_esports_once("刷新 VCT 联赛")
+            league_calls_after_first_sync = sum(
+                1 for call in CurrentVctProvider.calls if call[1] == "leagues"
+            )
+            await plugin._sync_esports_once("再次同步")
         finally:
             esports_feature.PandaScoreProvider = original
 
@@ -655,6 +687,10 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(
             "pandascore:valorant:770001",
             plugin._get_esports_store()["matches"],
+        )
+        self.assertEqual(
+            sum(1 for call in CurrentVctProvider.calls if call[1] == "leagues"),
+            league_calls_after_first_sync,
         )
 
     async def test_sync_fetches_target_league_history_before_pricing(self):
