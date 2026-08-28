@@ -944,6 +944,8 @@ class EsportsPredictionMixin:
                     target_league_ids[game].add(league_id)
 
             for game, league_ids in target_league_ids.items():
+                if game == "valorant":
+                    continue
                 refreshed_at = self._parse_esports_datetime(
                     league_refresh_times.get(game)
                 )
@@ -981,10 +983,10 @@ class EsportsPredictionMixin:
 
         requests = []
         for game, league_ids in target_league_ids.items():
-            if not league_ids:
+            if game == "lol" and not league_ids:
                 errors.append(f"{game}/leagues: 未找到允许的赛事")
                 continue
-            allowed_ids = tuple(sorted(league_ids))
+            allowed_ids = tuple(sorted(league_ids)) if game == "lol" else ()
             for state in ("past", "running", "upcoming"):
                 requests.append(
                     (
