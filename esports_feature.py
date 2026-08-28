@@ -933,8 +933,6 @@ class EsportsPredictionMixin:
         normalized_counts: Dict[str, int] = {
             game: 0 for game in settings["games"]
         }
-        accepted_response_counts: Dict[tuple[str, str], int] = {}
-        valorant_fallback_used = False
         target_league_ids: Dict[str, set[str]] = {
             game: set() for game in settings["games"]
         }
@@ -974,7 +972,7 @@ class EsportsPredictionMixin:
                     or attempt_time - refreshed_at
                     >= datetime.timedelta(hours=LEAGUE_DISCOVERY_REFRESH_HOURS)
                 )
-                if refresh_expired or (game == "lol" and not league_ids):
+                if game == "lol" and (refresh_expired or not league_ids):
                     discovery_games.append(game)
 
         discovery_requests = [
@@ -1006,7 +1004,7 @@ class EsportsPredictionMixin:
             if game == "lol" and not league_ids:
                 errors.append(f"{game}/leagues: 未找到允许的赛事")
                 continue
-            allowed_ids = tuple(sorted(league_ids))
+            allowed_ids = () if game == "valorant" else tuple(sorted(league_ids))
             for state in ("past", "running", "upcoming"):
                 requests.append(
                     (
@@ -1034,17 +1032,13 @@ class EsportsPredictionMixin:
             *(item[2] for item in requests), return_exceptions=True
         )
 
-        def collect_response(
-            game: str, state: str, response: Any, *, fallback: bool = False
-        ) -> None:
+        def collect_response(game: str, state: str, response: Any) -> None:
             if isinstance(response, BaseException):
-                suffix = "/fallback" if fallback else ""
-                errors.append(f"{game}/{state}{suffix}: {response}")
+                errors.append(f"{game}/{state}: {response}")
                 return
             raw_matches = response
             if not isinstance(raw_matches, list):
-                suffix = "/fallback" if fallback else ""
-                errors.append(f"{game}/{state}{suffix}: 数据格式不符合预期")
+                errors.append(f"{game}/{state}: 数据格式不符合预期")
                 return
             raw_counts[game] = raw_counts.get(game, 0) + len(raw_matches)
             for raw_match in raw_matches:
@@ -1053,43 +1047,12 @@ class EsportsPredictionMixin:
                     fetched.append(normalized)
                     normalized_counts[game] = normalized_counts.get(game, 0) + 1
                     if self._is_tier_one_match(normalized):
-                        key = (game, state)
-                        accepted_response_counts[key] = (
-                            accepted_response_counts.get(key, 0) + 1
-                        )
                         league_id = str(normalized.get("league_id", "") or "").strip()
                         if league_id:
                             target_league_ids.setdefault(game, set()).add(league_id)
 
         for (game, state, _), response in zip(requests, responses):
             collect_response(game, state, response)
-
-        valorant_ids = target_league_ids.get("valorant", set())
-        if (
-            "valorant" in settings["games"]
-            and valorant_ids
-            and accepted_response_counts.get(("valorant", "upcoming"), 0) == 0
-        ):
-            valorant_fallback_used = True
-            fallback_requests = [
-                (
-                    state,
-                    provider.fetch_matches(
-                        "valorant",
-                        state,
-                        pages=(5 if state == "upcoming" else 3 if state == "past" else 1),
-                        league_ids=(),
-                    ),
-                )
-                for state in ("past", "running", "upcoming")
-            ]
-            fallback_responses = await asyncio.gather(
-                *(item[1] for item in fallback_requests), return_exceptions=True
-            )
-            for (state, _), response in zip(
-                fallback_requests, fallback_responses
-            ):
-                collect_response("valorant", state, response, fallback=True)
 
         if not fetched and errors:
             async with self._data_lock:
@@ -1194,7 +1157,6 @@ class EsportsPredictionMixin:
             "settled": settled,
             "refunded": refunded,
             "errors": errors,
-            "valorant_fallback_used": valorant_fallback_used,
             "game_counts": {
                 game: {
                     "raw": raw_counts.get(game, 0),

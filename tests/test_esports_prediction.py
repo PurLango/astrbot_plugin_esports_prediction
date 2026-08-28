@@ -688,8 +688,8 @@ class TargetedHistoryProvider:
 
 
 class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
-    async def test_vct_precise_query_falls_back_when_cached_league_has_no_upcoming_match(self):
-        class HybridFallbackProvider:
+    async def test_vct_sync_does_not_depend_on_partial_league_catalog(self):
+        class PartialCatalogProvider:
             calls = []
 
             def __init__(self, token, **kwargs):
@@ -701,8 +701,8 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
                 return [
                     {
                         "id": 7900,
-                        "name": "Valorant Champions Tour 2026",
-                        "slug": "valorant-champions-tour-2026",
+                        "name": "VCT 2026 China",
+                        "slug": "vct-2026-china",
                     }
                 ]
 
@@ -712,7 +712,23 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
                 if game != "valorant" or state != "upcoming":
                     return []
                 if league_ids:
-                    return []
+                    return [
+                        {
+                            "id": 790100,
+                            "status": "not_started",
+                            "begin_at": "2026-08-29T10:00:00Z",
+                            "opponents": [
+                                {"id": 789, "name": "EDward Gaming", "acronym": "EDG"},
+                                {"id": 790, "name": "Bilibili Gaming", "acronym": "BLG"},
+                            ],
+                            "league": {
+                                "id": 7900,
+                                "name": "VCT 2026 China",
+                                "slug": "vct-2026-china",
+                            },
+                            "serie": {"name": "Stage 2"},
+                        }
+                    ]
                 return [
                     {
                         "id": 790101,
@@ -728,7 +744,37 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
                             "slug": "vct-2026-pacific",
                         },
                         "serie": {"name": "Stage 2"},
-                    }
+                    },
+                    {
+                        "id": 790102,
+                        "status": "not_started",
+                        "begin_at": "2026-08-29T13:00:00Z",
+                        "opponents": [
+                            {"id": 793, "name": "NRG", "acronym": "NRG"},
+                            {"id": 794, "name": "LOUD", "acronym": "LOUD"},
+                        ],
+                        "league": {
+                            "id": 7902,
+                            "name": "VCT 2026 Americas",
+                            "slug": "vct-2026-americas",
+                        },
+                        "serie": {"name": "Stage 2"},
+                    },
+                    {
+                        "id": 790103,
+                        "status": "not_started",
+                        "begin_at": "2026-08-29T14:00:00Z",
+                        "opponents": [
+                            {"id": 795, "name": "Team Liquid", "acronym": "TL"},
+                            {"id": 796, "name": "FNATIC", "acronym": "FNC"},
+                        ],
+                        "league": {
+                            "id": 7903,
+                            "name": "VCT 2026 EMEA",
+                            "slug": "vct-2026-emea",
+                        },
+                        "serie": {"name": "Stage 2"},
+                    },
                 ]
 
         plugin = build_plugin()
@@ -736,18 +782,23 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
             2026, 8, 28, 0, 0, tzinfo=datetime.timezone.utc
         )
         original = esports_feature.PandaScoreProvider
-        esports_feature.PandaScoreProvider = HybridFallbackProvider
-        HybridFallbackProvider.calls = []
+        esports_feature.PandaScoreProvider = PartialCatalogProvider
+        PartialCatalogProvider.calls = []
         try:
-            await plugin._sync_esports_once("混合同步兜底")
+            await plugin._sync_esports_once("跨赛区 VCT 同步")
         finally:
             esports_feature.PandaScoreProvider = original
 
-        self.assertIn(("valorant", "upcoming", ("7900",), 2), HybridFallbackProvider.calls)
-        self.assertIn(("valorant", "upcoming", (), 5), HybridFallbackProvider.calls)
-        self.assertIn(
-            "pandascore:valorant:790101",
-            plugin._get_esports_store()["matches"],
+        valorant_calls = [call for call in PartialCatalogProvider.calls if call[0] == "valorant"]
+        self.assertTrue(valorant_calls)
+        self.assertTrue(all(not call[2] for call in valorant_calls))
+        self.assertEqual(
+            {
+                "pandascore:valorant:790101",
+                "pandascore:valorant:790102",
+                "pandascore:valorant:790103",
+            },
+            set(plugin._get_esports_store()["matches"]),
         )
 
     async def test_vct_sync_scans_beyond_first_two_upcoming_pages_and_reports_counts(self):
@@ -850,7 +901,7 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
             plugin._get_esports_store()["matches"],
         )
 
-    async def test_sync_refreshes_stale_valorant_league_cache_and_queries_precisely(self):
+    async def test_sync_ignores_stale_valorant_league_cache(self):
         class CurrentVctProvider:
             calls = []
 
@@ -859,14 +910,6 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
 
             async def fetch_leagues(self, game, **kwargs):
                 self.calls.append((game, "leagues", ()))
-                if game == "valorant":
-                    return [
-                        {
-                            "id": 7701,
-                            "name": "Valorant Champions Tour 2026",
-                            "slug": "valorant-champions-tour-2026",
-                        }
-                    ]
                 return [{"id": 9001, "name": "LPL", "slug": "lpl"}]
 
             async def fetch_matches(self, game, state, **kwargs):
@@ -877,7 +920,7 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
                 if (
                     game != "valorant"
                     or state != "upcoming"
-                    or league_ids != ("7701",)
+                    or league_ids
                 ):
                     return []
                 return [
@@ -907,23 +950,22 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
         esports_feature.PandaScoreProvider = CurrentVctProvider
         CurrentVctProvider.calls = []
         try:
-            await plugin._sync_esports_once("刷新 VCT 联赛")
-            league_calls_after_first_sync = sum(
-                1 for call in CurrentVctProvider.calls if call[1] == "leagues"
-            )
+            await plugin._sync_esports_once("忽略旧 VCT 联赛缓存")
             await plugin._sync_esports_once("再次同步")
         finally:
             esports_feature.PandaScoreProvider = original
 
-        self.assertIn(("valorant", "leagues", ()), CurrentVctProvider.calls)
-        self.assertIn(("valorant", "upcoming", ("7701",)), CurrentVctProvider.calls)
+        self.assertNotIn(("valorant", "leagues", ()), CurrentVctProvider.calls)
+        valorant_match_calls = [
+            call
+            for call in CurrentVctProvider.calls
+            if call[0] == "valorant" and call[1] != "leagues"
+        ]
+        self.assertTrue(valorant_match_calls)
+        self.assertTrue(all(not call[2] for call in valorant_match_calls))
         self.assertIn(
             "pandascore:valorant:770001",
             plugin._get_esports_store()["matches"],
-        )
-        self.assertEqual(
-            sum(1 for call in CurrentVctProvider.calls if call[1] == "leagues"),
-            league_calls_after_first_sync,
         )
 
     async def test_sync_fetches_target_league_history_before_pricing(self):
