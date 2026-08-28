@@ -933,6 +933,8 @@ class EsportsPredictionMixin:
         normalized_counts: Dict[str, int] = {
             game: 0 for game in settings["games"]
         }
+        accepted_response_counts: Dict[tuple[str, str], int] = {}
+        valorant_fallback_used = False
         target_league_ids: Dict[str, set[str]] = {
             game: set() for game in settings["games"]
         }
@@ -964,17 +966,15 @@ class EsportsPredictionMixin:
                     target_league_ids[game].add(league_id)
 
             for game, league_ids in target_league_ids.items():
-                if game == "valorant":
-                    continue
                 refreshed_at = self._parse_esports_datetime(
                     league_refresh_times.get(game)
                 )
-                if (
-                    not league_ids
-                    or refreshed_at is None
+                refresh_expired = (
+                    refreshed_at is None
                     or attempt_time - refreshed_at
                     >= datetime.timedelta(hours=LEAGUE_DISCOVERY_REFRESH_HOURS)
-                ):
+                )
+                if refresh_expired or (game == "lol" and not league_ids):
                     discovery_games.append(game)
 
         discovery_requests = [
@@ -997,16 +997,16 @@ class EsportsPredictionMixin:
                 and self._is_tier_one_league(game, league)
                 and str(league.get("id", "") or "").strip()
             }
+            league_refresh_times[game] = attempt_at
             if discovered_ids:
                 target_league_ids[game] = discovered_ids
-                league_refresh_times[game] = attempt_at
 
         requests = []
         for game, league_ids in target_league_ids.items():
             if game == "lol" and not league_ids:
                 errors.append(f"{game}/leagues: 未找到允许的赛事")
                 continue
-            allowed_ids = tuple(sorted(league_ids)) if game == "lol" else ()
+            allowed_ids = tuple(sorted(league_ids))
             for state in ("past", "running", "upcoming"):
                 requests.append(
                     (
@@ -1017,7 +1017,9 @@ class EsportsPredictionMixin:
                             state,
                             pages=(
                                 5
-                                if game == "valorant" and state == "upcoming"
+                                if game == "valorant"
+                                and not allowed_ids
+                                and state == "upcoming"
                                 else 3
                                 if state == "past"
                                 else 2
@@ -1031,20 +1033,63 @@ class EsportsPredictionMixin:
         responses = await asyncio.gather(
             *(item[2] for item in requests), return_exceptions=True
         )
-        for (game, state, _), response in zip(requests, responses):
+
+        def collect_response(
+            game: str, state: str, response: Any, *, fallback: bool = False
+        ) -> None:
             if isinstance(response, BaseException):
-                errors.append(f"{game}/{state}: {response}")
-                continue
+                suffix = "/fallback" if fallback else ""
+                errors.append(f"{game}/{state}{suffix}: {response}")
+                return
             raw_matches = response
             if not isinstance(raw_matches, list):
-                errors.append(f"{game}/{state}: 数据格式不符合预期")
-                continue
+                suffix = "/fallback" if fallback else ""
+                errors.append(f"{game}/{state}{suffix}: 数据格式不符合预期")
+                return
             raw_counts[game] = raw_counts.get(game, 0) + len(raw_matches)
             for raw_match in raw_matches:
                 normalized = self._normalize_pandascore_match(game, raw_match)
                 if normalized:
                     fetched.append(normalized)
                     normalized_counts[game] = normalized_counts.get(game, 0) + 1
+                    if self._is_tier_one_match(normalized):
+                        key = (game, state)
+                        accepted_response_counts[key] = (
+                            accepted_response_counts.get(key, 0) + 1
+                        )
+                        league_id = str(normalized.get("league_id", "") or "").strip()
+                        if league_id:
+                            target_league_ids.setdefault(game, set()).add(league_id)
+
+        for (game, state, _), response in zip(requests, responses):
+            collect_response(game, state, response)
+
+        valorant_ids = target_league_ids.get("valorant", set())
+        if (
+            "valorant" in settings["games"]
+            and valorant_ids
+            and accepted_response_counts.get(("valorant", "upcoming"), 0) == 0
+        ):
+            valorant_fallback_used = True
+            fallback_requests = [
+                (
+                    state,
+                    provider.fetch_matches(
+                        "valorant",
+                        state,
+                        pages=(5 if state == "upcoming" else 3 if state == "past" else 1),
+                        league_ids=(),
+                    ),
+                )
+                for state in ("past", "running", "upcoming")
+            ]
+            fallback_responses = await asyncio.gather(
+                *(item[1] for item in fallback_requests), return_exceptions=True
+            )
+            for (state, _), response in zip(
+                fallback_requests, fallback_responses
+            ):
+                collect_response("valorant", state, response, fallback=True)
 
         if not fetched and errors:
             async with self._data_lock:
@@ -1149,6 +1194,7 @@ class EsportsPredictionMixin:
             "settled": settled,
             "refunded": refunded,
             "errors": errors,
+            "valorant_fallback_used": valorant_fallback_used,
             "game_counts": {
                 game: {
                     "raw": raw_counts.get(game, 0),
@@ -1250,12 +1296,30 @@ class EsportsPredictionMixin:
             or datetime.datetime.max.replace(tzinfo=datetime.timezone.utc),
         )
 
+    @staticmethod
+    def _resolve_match_game_filter(value: Any) -> str | None:
+        normalized = re.sub(r"\s+", "", str(value or "")).casefold()
+        if not normalized:
+            return ""
+        aliases = {
+            "lol": "lol",
+            "英雄联盟": "lol",
+            "撸": "lol",
+            "撸啊撸": "lol",
+            "valorant": "valorant",
+            "vct": "valorant",
+            "无畏契约": "valorant",
+            "瓦": "valorant",
+            "瓦罗兰特": "valorant",
+        }
+        return aliases.get(normalized)
+
     def _esports_help_message(self) -> str:
         return "\n".join(
             [
                 "【赛事竞猜使用方法】",
                 "",
-                "查看比赛：/今日赛事",
+                "查看比赛：/今日赛事 [撸/瓦]",
                 "参与竞猜：/竞猜 L001 TES 100",
                 "追加同队：再次输入相同竞猜指令",
                 "改选队伍：/改选 L001 BLG",
@@ -1282,8 +1346,23 @@ class EsportsPredictionMixin:
         if not settings["enabled"]:
             yield self._plain_result(event, "当前未开启电竞竞猜功能。")
             return
+        game_filter = self._resolve_match_game_filter(
+            self._get_command_args(event)
+        )
+        if game_filter is None:
+            yield self._plain_result(
+                event,
+                "用法：/今日赛事 [撸/瓦]\n也可以填写 lol、valorant、英雄联盟或无畏契约。",
+            )
+            return
         async with self._data_lock:
             matches = self._visible_upcoming_matches_locked()
+            if game_filter:
+                matches = [
+                    match
+                    for match in matches
+                    if str(match.get("game", "")).lower() == game_filter
+                ]
             offset = datetime.timezone(datetime.timedelta(hours=settings["timezone_offset_hours"]))
             today = self._utcnow().astimezone(offset).date()
             today_matches = [
@@ -1294,9 +1373,24 @@ class EsportsPredictionMixin:
             selected = self._select_matches_for_display(matches)
             blocks = [self._format_match_line_locked(item) for item in selected]
         if not blocks:
-            yield self._plain_result(event, "当前没有已收录的待竞猜赛事。管理员可以先同步或手动添加比赛。")
+            game_label = {
+                "lol": "英雄联盟",
+                "valorant": "无畏契约",
+            }.get(game_filter, "")
+            yield self._plain_result(
+                event,
+                f"当前没有已收录的{game_label}待竞猜赛事。管理员可以先同步或手动添加比赛。",
+            )
             return
-        title = "今日及近期可竞猜赛事" if today_matches else "近期可竞猜赛事"
+        game_label = {
+            "lol": "英雄联盟",
+            "valorant": "无畏契约",
+        }.get(game_filter, "")
+        title = (
+            f"{game_label}今日及近期可竞猜赛事"
+            if today_matches
+            else f"{game_label}近期可竞猜赛事"
+        )
         example_id = selected[0].get("display_id", "编号")
         message = (
             f"{title}（{len(blocks)} 场）\n\n"

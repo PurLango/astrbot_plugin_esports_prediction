@@ -73,7 +73,7 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         reply = await anext(plugin.esports_bet(FakeEvent("/竞猜")))
 
         self.assertIn("赛事竞猜使用方法", reply)
-        self.assertIn("/今日赛事", reply)
+        self.assertIn("/今日赛事 [撸/瓦]", reply)
         self.assertIn("/竞猜 L001 TES 100", reply)
         self.assertIn("/改选 L001 BLG", reply)
         self.assertIn("/撤销竞猜 L001", reply)
@@ -130,6 +130,41 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(valorant_match["display_id"], reply)
         self.assertIn("｜VALORANT】", reply)
         self.assertNotIn(lol_matches[-1]["display_id"], reply)
+
+    async def test_today_matches_can_filter_by_short_game_name(self):
+        plugin = build_plugin()
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 28, 0, 0, tzinfo=datetime.timezone.utc
+        )
+        lol_match = plugin._create_manual_match_locked(
+            "lol", "LPL", "BLG", "TES", "2026-08-29 19:00"
+        )
+        valorant_match = plugin._create_manual_match_locked(
+            "valorant", "VCT Pacific", "EDG", "PRX", "2026-08-29 20:00"
+        )
+
+        valorant_reply = await anext(
+            plugin.esports_matches(FakeEvent("/今日赛事 瓦"))
+        )
+        lol_reply = await anext(
+            plugin.esports_matches(FakeEvent("/今日赛事 撸"))
+        )
+
+        self.assertIn(valorant_match["display_id"], valorant_reply)
+        self.assertNotIn(lol_match["display_id"], valorant_reply)
+        self.assertIn("无畏契约", valorant_reply)
+        self.assertIn(lol_match["display_id"], lol_reply)
+        self.assertNotIn(valorant_match["display_id"], lol_reply)
+        self.assertIn("英雄联盟", lol_reply)
+
+    async def test_today_matches_rejects_unknown_game_filter(self):
+        plugin = build_plugin()
+
+        reply = await anext(
+            plugin.esports_matches(FakeEvent("/今日赛事 dota"))
+        )
+
+        self.assertIn("用法：/今日赛事 [撸/瓦]", reply)
 
     async def test_match_detail_is_not_registered_as_a_chat_command(self):
         self.assertNotIn("赛事详情", REGISTERED_COMMAND_NAMES)
@@ -653,6 +688,68 @@ class TargetedHistoryProvider:
 
 
 class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_vct_precise_query_falls_back_when_cached_league_has_no_upcoming_match(self):
+        class HybridFallbackProvider:
+            calls = []
+
+            def __init__(self, token, **kwargs):
+                pass
+
+            async def fetch_leagues(self, game, **kwargs):
+                if game == "lol":
+                    return [{"id": 9001, "name": "LPL", "slug": "lpl"}]
+                return [
+                    {
+                        "id": 7900,
+                        "name": "Valorant Champions Tour 2026",
+                        "slug": "valorant-champions-tour-2026",
+                    }
+                ]
+
+            async def fetch_matches(self, game, state, **kwargs):
+                league_ids = tuple(str(item) for item in kwargs.get("league_ids", []))
+                self.calls.append((game, state, league_ids, kwargs.get("pages")))
+                if game != "valorant" or state != "upcoming":
+                    return []
+                if league_ids:
+                    return []
+                return [
+                    {
+                        "id": 790101,
+                        "status": "not_started",
+                        "begin_at": "2026-08-29T12:00:00Z",
+                        "opponents": [
+                            {"id": 791, "name": "EDward Gaming", "acronym": "EDG"},
+                            {"id": 792, "name": "Paper Rex", "acronym": "PRX"},
+                        ],
+                        "league": {
+                            "id": 7901,
+                            "name": "VCT 2026 Pacific",
+                            "slug": "vct-2026-pacific",
+                        },
+                        "serie": {"name": "Stage 2"},
+                    }
+                ]
+
+        plugin = build_plugin()
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 28, 0, 0, tzinfo=datetime.timezone.utc
+        )
+        original = esports_feature.PandaScoreProvider
+        esports_feature.PandaScoreProvider = HybridFallbackProvider
+        HybridFallbackProvider.calls = []
+        try:
+            await plugin._sync_esports_once("混合同步兜底")
+        finally:
+            esports_feature.PandaScoreProvider = original
+
+        self.assertIn(("valorant", "upcoming", ("7900",), 2), HybridFallbackProvider.calls)
+        self.assertIn(("valorant", "upcoming", (), 5), HybridFallbackProvider.calls)
+        self.assertIn(
+            "pandascore:valorant:790101",
+            plugin._get_esports_store()["matches"],
+        )
+
     async def test_vct_sync_scans_beyond_first_two_upcoming_pages_and_reports_counts(self):
         class DeepVctProvider:
             calls = []
@@ -753,7 +850,7 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
             plugin._get_esports_store()["matches"],
         )
 
-    async def test_sync_ignores_stale_valorant_league_cache_and_keeps_vct_match(self):
+    async def test_sync_refreshes_stale_valorant_league_cache_and_queries_precisely(self):
         class CurrentVctProvider:
             calls = []
 
@@ -780,7 +877,7 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
                 if (
                     game != "valorant"
                     or state != "upcoming"
-                    or league_ids
+                    or league_ids != ("7701",)
                 ):
                     return []
                 return [
@@ -818,7 +915,8 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
         finally:
             esports_feature.PandaScoreProvider = original
 
-        self.assertNotIn(("valorant", "leagues", ()), CurrentVctProvider.calls)
+        self.assertIn(("valorant", "leagues", ()), CurrentVctProvider.calls)
+        self.assertIn(("valorant", "upcoming", ("7701",)), CurrentVctProvider.calls)
         self.assertIn(
             "pandascore:valorant:770001",
             plugin._get_esports_store()["matches"],
