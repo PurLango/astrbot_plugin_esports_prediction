@@ -1621,7 +1621,7 @@ class PointSystemPlugin(
             raw_values = []
 
         normalized = {self._normalize_user_id(item) for item in raw_values}
-        return {item for item in normalized if item.isdigit()}
+        return {item for item in normalized if item}
 
     def _get_red_packet_settings(self) -> Dict[str, Any]:
         packet_cfg = self.config.get("red_packet_settings", {})
@@ -2685,9 +2685,10 @@ class PointSystemPlugin(
             raw_user_id = message_sender.get("user_id")
         else:
             raw_user_id = getattr(message_sender, "user_id", None)
-        normalized_raw_user_id = self._normalize_user_id(raw_user_id)
-        if normalized_raw_user_id.isdigit():
-            sender_ids.add(normalized_raw_user_id)
+        if raw_user_id is not None:
+            normalized_raw_user_id = self._normalize_user_id(raw_user_id)
+            if normalized_raw_user_id:
+                sender_ids.add(normalized_raw_user_id)
 
         if admin_ids.isdisjoint(sender_ids):
             return (

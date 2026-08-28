@@ -111,7 +111,7 @@
     { id: "operations", label: "运维与管理", icon: "settings-2", description: "配置管理员权限、备份与负积分提示。", fields: [
       { path: "admin_settings.log_operations", label: "记录管理操作", hint: "在日志中记录管理员加减积分", type: "boolean" },
       { path: "admin_settings.max_admin_give", label: "单次管理积分上限", hint: "限制管理员每次加减积分额度", type: "number", min: 1 },
-      { path: "admin_settings.points_admin_ids", label: "积分管理员 QQ", hint: "一行一个 QQ 号", type: "list", full: true },
+      { path: "admin_settings.points_admin_ids", label: "积分管理员账号", hint: "个人 QQ 填 QQ 号；QQ 官方机器人填消息账号 OpenID，一行一个", type: "list", full: true },
       { path: "backup_settings.enabled", label: "启用自动备份", hint: "每天按设定时间备份积分数据", type: "boolean" },
       { path: "backup_settings.auto_backup_time", label: "自动备份时间", hint: "24 小时制，例如 03:00", type: "time" },
       { path: "backup_settings.backup_paths", label: "备份路径", hint: "一行一个目录或文件路径", type: "list", full: true },

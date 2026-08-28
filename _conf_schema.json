@@ -695,9 +695,9 @@
         "default": 1000
       },
       "points_admin_ids": {
-        "description": "积分管理员 QQ 列表",
+        "description": "积分管理员账号列表",
         "type": "list",
-        "hint": "只有这里配置的 QQ 号可以使用 /给积分 和 /扣积分，例如填写 123456789。",
+        "hint": "个人 QQ 适配器填写 QQ 号；QQ 官方机器人填写消息账号 OpenID。只有列表中的账号可以使用 /给积分 和 /扣积分。",
         "default": []
       }
     }

@@ -23,6 +23,14 @@ def build_plugin(admin_ids):
 
 
 class AdminPermissionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_openid_admin_is_not_discarded_as_non_numeric(self):
+        openid = "B5138C3BBF9FC0FCEEB211E54B91FF9C"
+        plugin = build_plugin([openid])
+
+        error = await plugin._ensure_points_admin(FakeEvent(openid))
+
+        self.assertIsNone(error)
+
     async def test_admin_sender_id_is_normalized_before_comparison(self):
         plugin = build_plugin(["123456789"])
 

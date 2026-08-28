@@ -2,7 +2,7 @@
 
 面向 AstrBot 群聊的电竞赛事胜者竞猜插件。机器人自动收集赛程与赛果，群成员使用积分竞猜，比赛结束后自动结算。
 
-- 当前版本：`2.4.14`
+- 当前版本：`2.4.15`
 - 最低 AstrBot 版本：`4.22.0`
 - 数据来源：[PandaScore](https://pandascore.co/)
 
@@ -59,7 +59,7 @@
 
 PandaScore Token 只应保存在 AstrBot 本地配置中，不要发送到群聊或提交到仓库。未配置 Token 时，管理员仍可手动添加、结算和退款。
 
-积分管理员由 `admin_settings.points_admin_ids` 配置。测试时可先使用 `/给积分 @用户 1000` 发放积分。
+积分管理员由 `admin_settings.points_admin_ids` 配置。个人 QQ 填写 QQ 号，QQ 官方机器人填写消息账号 OpenID。测试时可先使用 `/给积分 @用户 1000` 发放积分。
 
 ## 指令一览
 
