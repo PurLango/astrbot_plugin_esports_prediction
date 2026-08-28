@@ -135,6 +135,33 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("赛事详情", REGISTERED_COMMAND_NAMES)
         self.assertFalse(hasattr(PointSystemPlugin, "esports_match_detail_command"))
 
+    async def test_recent_results_show_finished_match_score_and_winner(self):
+        plugin = build_plugin()
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 28, 12, 0, tzinfo=datetime.timezone.utc
+        )
+        match = plugin._create_manual_match_locked(
+            "valorant", "VCT Pacific", "EDward Gaming", "Paper Rex", "2026-08-28 18:00"
+        )
+        match["teams"][0]["code"] = "EDG"
+        match["teams"][1]["code"] = "PRX"
+        match["teams"][0]["score"] = 2
+        match["teams"][1]["score"] = 1
+        match["winner_id"] = match["teams"][0]["id"]
+        match["status"] = "settled"
+        match["end_time"] = "2026-08-28T11:30:00+00:00"
+        match["settled_at"] = "2026-08-28T11:31:00+00:00"
+
+        reply = await anext(plugin.esports_results(FakeEvent("/比赛结果")))
+
+        self.assertIn(f"【{match['display_id']}｜VALORANT】", reply)
+        self.assertIn("对阵：EDG 2 : 1 PRX", reply)
+        self.assertIn("赛果：EDG 获胜", reply)
+
+    async def test_recent_result_commands_are_registered(self):
+        self.assertIn("比赛结果", REGISTERED_COMMAND_NAMES)
+        self.assertIn("赛事结果", REGISTERED_COMMAND_NAMES)
+
     async def test_match_ids_are_short_and_legacy_ids_remain_resolvable(self):
         plugin = build_plugin()
         first = plugin._create_manual_match_locked(
@@ -288,6 +315,10 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bet["team_name"], "TES")
         self.assertIn("｜TES｜", reply)
         self.assertNotIn("Top Esports", reply)
+        self.assertIn(
+            f"赛事竞猜：{match['display_id']} TES",
+            plugin.data["point_transactions"][-1]["source"],
+        )
 
     async def test_same_user_bet_is_merged_across_groups(self):
         plugin = build_plugin()
@@ -324,6 +355,10 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bet["status"], "withdrawn")
         self.assertEqual(plugin.data["users"]["123"]["points"], 1000)
         self.assertIn("撤单成功", cancelled)
+        self.assertEqual(
+            [item["delta"] for item in plugin.data["point_transactions"]],
+            [-200, 200],
+        )
 
     async def test_settlement_pays_locked_multiplier(self):
         plugin = build_plugin()
@@ -618,6 +653,56 @@ class TargetedHistoryProvider:
 
 
 class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_vct_sync_scans_beyond_first_two_upcoming_pages_and_reports_counts(self):
+        class DeepVctProvider:
+            calls = []
+
+            def __init__(self, token, **kwargs):
+                pass
+
+            async def fetch_leagues(self, game, **kwargs):
+                if game == "lol":
+                    return [{"id": 9001, "name": "LPL", "slug": "lpl"}]
+                return []
+
+            async def fetch_matches(self, game, state, **kwargs):
+                self.calls.append((game, state, kwargs.get("pages")))
+                if game != "valorant" or state != "upcoming" or kwargs.get("pages", 0) < 3:
+                    return []
+                return [
+                    {
+                        "id": 790001,
+                        "status": "not_started",
+                        "begin_at": "2026-08-29T12:00:00Z",
+                        "opponents": [
+                            {"opponent": {"id": 791, "name": "EDward Gaming", "acronym": "EDG"}},
+                            {"opponent": {"id": 792, "name": "Paper Rex", "acronym": "PRX"}},
+                        ],
+                        "league": {
+                            "id": 7900,
+                            "name": "Valorant Champions Tour 2026",
+                            "slug": "valorant-champions-tour-2026",
+                        },
+                        "serie": {"name": "Champions"},
+                    }
+                ]
+
+        plugin = build_plugin()
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 28, 0, 0, tzinfo=datetime.timezone.utc
+        )
+        original = esports_feature.PandaScoreProvider
+        esports_feature.PandaScoreProvider = DeepVctProvider
+        DeepVctProvider.calls = []
+        try:
+            result = await plugin._sync_esports_once("深页 VCT 同步")
+        finally:
+            esports_feature.PandaScoreProvider = original
+
+        self.assertIn(("valorant", "upcoming", 5), DeepVctProvider.calls)
+        self.assertIn("pandascore:valorant:790001", plugin._get_esports_store()["matches"])
+        self.assertIn("VALORANT 原始 1/收录 1", result["summary"])
+
     async def test_sync_fetches_vct_matches_without_league_catalog_ids(self):
         class VctWithoutCatalogProvider:
             calls = []

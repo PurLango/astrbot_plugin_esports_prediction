@@ -118,6 +118,12 @@ class BirthdayFeatureMixin:
                 return f"{reply_name}今年的生日签到奖励已经领过啦，明年再来吧。"
 
             user_info["points"] += reward_points
+            self._record_point_transaction_locked(
+                user_id,
+                reward_points,
+                "生日签到",
+                balance=user_info["points"],
+            )
             user_info["last_birthday_sign_in_year"] = current_year
             total_points = user_info["points"]
             await self._save_data_locked()

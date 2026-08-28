@@ -31,10 +31,12 @@ except ImportError:
     from lottery_feature import LotteryFeatureMixin
 
 PLUGIN_NAME = "astrbot_plugin_point_system"
-DATA_VERSION = 14
+DATA_VERSION = 15
 POINT_SNAPSHOT_BUCKET_MINUTES = 15
 POINT_SNAPSHOT_RETENTION_DAYS = 90
 POINT_SNAPSHOT_MAX_RECORDS = 10000
+POINT_TRANSACTION_MAX_RECORDS = 10000
+POINT_HISTORY_LIMIT = 5
 DEFAULT_POINTS_NAME = "积分"
 GLOBAL_SIGN_IN_SCOPE_ID = "__global_sign_in__"
 PRIVATE_SEND_SUCCESS = "success"
@@ -81,6 +83,8 @@ REGISTERED_COMMAND_NAMES = (
     "生日签到",
     "签到",
     "我的积分",
+    "积分记录",
+    "积分明细",
     "积分规则",
     "积分榜",
     "给积分",
@@ -101,6 +105,9 @@ REGISTERED_COMMAND_NAMES = (
     "撤单",
     "我的竞猜",
     "竞猜记录",
+    "比赛结果",
+    "赛事结果",
+    "竞猜结果",
     "竞猜排行",
     "竞猜规则",
     "竞猜管理",
@@ -114,7 +121,7 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "赛事积分竞猜是一个面向 AstrBot 群聊的电竞赛事竞猜与积分互动插件，支持 LoL、VALORANT 赛程同步、动态倍率、积分下注、自动结算，以及签到、抽奖和兑换等积分功能。",
-    "2.4.11",
+    "2.5.0",
     "https://github.com/PurLango/astrbot_plugin_esports_prediction",
 )
 class PointSystemPlugin(
@@ -188,6 +195,7 @@ class PointSystemPlugin(
             "private_message_targets": {},
             "red_packets": [],
             "point_snapshots": [],
+            "point_transactions": [],
             "esports": self._new_esports_store(),
             "reset_generation": 0,
         }
@@ -322,7 +330,11 @@ class PointSystemPlugin(
         )
 
     def _plain_result(self, event: AstrMessageEvent, text: Any):
-        return event.plain_result(self._single_line_message(text))
+        if text is None:
+            normalized = ""
+        else:
+            normalized = str(text).replace("\r\n", "\n").replace("\r", "\n").strip()
+        return event.plain_result(normalized)
 
     def _normalize_backup_time(self, value: Any) -> str:
         text = self._normalize_text(value).strip()
@@ -666,10 +678,15 @@ class PointSystemPlugin(
             removed_redemption = redemptions.pop(redemption_index)
             user_info = users[sender_id]
             user_info["points"] += cost
+            transaction = self._record_point_transaction_locked(
+                sender_id, cost, "兑换失败退款", balance=user_info["points"]
+            )
             if await self._save_data_locked():
                 return True
 
             user_info["points"] -= cost
+            if transaction in self.data.setdefault("point_transactions", []):
+                self.data["point_transactions"].remove(transaction)
             redemptions.insert(redemption_index, removed_redemption)
             logger.error(
                 f"[PointSystem] 私聊失败后的兑换回滚保存失败: user={sender_id}"
@@ -1112,6 +1129,62 @@ class PointSystemPlugin(
         snapshots = [by_bucket[key] for key in sorted(by_bucket)]
         return snapshots[-POINT_SNAPSHOT_MAX_RECORDS:]
 
+    def _normalize_point_transactions(self, raw: Any) -> list[Dict[str, Any]]:
+        if not isinstance(raw, list):
+            return []
+
+        transactions: list[Dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            user_id = self._normalize_user_id(item.get("user_id"))
+            delta = self._normalize_signed_int(item.get("delta"), 0)
+            source = " ".join(self._normalize_text(item.get("source")).split())[:80]
+            created_at = self._normalize_text(item.get("created_at")).strip()[:40]
+            if not user_id or delta == 0 or not source or not created_at:
+                continue
+            transactions.append(
+                {
+                    "id": self._normalize_text(item.get("id")).strip()
+                    or uuid.uuid4().hex,
+                    "user_id": user_id,
+                    "delta": delta,
+                    "balance": self._normalize_signed_int(item.get("balance"), 0),
+                    "source": source,
+                    "created_at": created_at,
+                }
+            )
+        return transactions[-POINT_TRANSACTION_MAX_RECORDS:]
+
+    def _record_point_transaction_locked(
+        self,
+        user_id: Any,
+        delta: Any,
+        source: Any,
+        *,
+        balance: Any | None = None,
+    ) -> Dict[str, Any] | None:
+        normalized_user_id = self._normalize_user_id(user_id)
+        normalized_delta = self._normalize_signed_int(delta, 0)
+        normalized_source = " ".join(str(source or "").split())[:80]
+        if not normalized_user_id or normalized_delta == 0 or not normalized_source:
+            return None
+        if balance is None:
+            balance = self._get_user_record(normalized_user_id).get("points", 0)
+        record = {
+            "id": uuid.uuid4().hex,
+            "user_id": normalized_user_id,
+            "delta": normalized_delta,
+            "balance": self._normalize_signed_int(balance, 0),
+            "source": normalized_source,
+            "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+        transactions = self.data.setdefault("point_transactions", [])
+        transactions.append(record)
+        if len(transactions) > POINT_TRANSACTION_MAX_RECORDS:
+            del transactions[:-POINT_TRANSACTION_MAX_RECORDS]
+        return record
+
     def _record_point_snapshot(
         self, now: datetime.datetime | None = None
     ) -> bool:
@@ -1215,6 +1288,9 @@ class PointSystemPlugin(
             )
             store["point_snapshots"] = self._normalize_point_snapshots(
                 raw.get("point_snapshots", [])
+            )
+            store["point_transactions"] = self._normalize_point_transactions(
+                raw.get("point_transactions", [])
             )
             store["esports"] = self._normalize_esports_store(raw.get("esports", {}))
             store["reset_generation"] = self._normalize_int(
@@ -1667,11 +1743,14 @@ class PointSystemPlugin(
 
     @staticmethod
     def _red_packet_help() -> str:
-        return (
-            "用法：/积分红包 固定 每份积分 份数；"
-            "/积分红包 拼手气 总积分 份数；"
-            "/积分红包 口令 总积分 份数 口令。"
-            "创建后，成员发送 /抢红包 编号，口令红包需追加口令。"
+        return "\n".join(
+            [
+                "【积分红包用法】",
+                "固定：/积分红包 固定 每份积分 份数",
+                "拼手气：/积分红包 拼手气 总积分 份数",
+                "口令：/积分红包 口令 总积分 份数 口令",
+                "领取：/抢红包 编号 [口令]",
+            ]
         )
 
     @staticmethod
@@ -2624,6 +2703,12 @@ class PointSystemPlugin(
                     continue
 
                 user_info["points"] += entry["reward_points"]
+                self._record_point_transaction_locked(
+                    user_id,
+                    entry["reward_points"],
+                    f"日期口令：{entry['name']}",
+                    balance=user_info["points"],
+                )
                 claims[entry["name"]] = {
                     "date": today_iso,
                     "count": claim_count + 1,
@@ -2700,7 +2785,7 @@ class PointSystemPlugin(
         return None
 
     async def _deduct_sender_points(
-        self, event: AstrMessageEvent, cost: int
+        self, event: AstrMessageEvent, cost: int, source: str = "积分兑换"
     ) -> tuple[bool, int]:
         sender_id = str(event.get_sender_id())
 
@@ -2712,19 +2797,25 @@ class PointSystemPlugin(
                 return False, user_info["points"]
 
             user_info["points"] -= cost
+            self._record_point_transaction_locked(
+                sender_id, -cost, source, balance=user_info["points"]
+            )
             remaining_points = user_info["points"]
             await self._save_data_locked()
 
         return True, remaining_points
 
     async def _refund_sender_points(
-        self, event: AstrMessageEvent, amount: int
+        self, event: AstrMessageEvent, amount: int, source: str = "兑换失败退款"
     ) -> int:
         sender_id = str(event.get_sender_id())
 
         async with self._data_lock:
             user_info = self._get_user_record(sender_id)
             user_info["points"] += amount
+            self._record_point_transaction_locked(
+                sender_id, amount, source, balance=user_info["points"]
+            )
             await self._save_data_locked()
             return user_info["points"]
 
@@ -2775,6 +2866,7 @@ class PointSystemPlugin(
 
         async with self._data_lock:
             user_info = self._get_user_record(user_id)
+            points_before = user_info["points"]
             group_member_changed = self._touch_group_member(
                 event, user_id, self._get_sender_display_name(event)
             )
@@ -2861,6 +2953,13 @@ class PointSystemPlugin(
 
             self._apply_fortune_pity_progress(user_info, fortune_event_type)
             birthday_reward_triggered = self._apply_birthday_reward_locked(user_info, now)
+
+            self._record_point_transaction_locked(
+                user_id,
+                user_info["points"] - points_before,
+                "签到",
+                balance=user_info["points"],
+            )
 
             user_info["last_sign_in"] = today
             user_info["total_sign_in_days"] = previous_days + 1
@@ -2982,6 +3081,12 @@ class PointSystemPlugin(
         async for result in EsportsPredictionMixin.esports_my_bets(self, event):
             yield result
 
+    @filter.command("比赛结果", alias={"赛事结果", "竞猜结果"})
+    async def esports_results_command(self, event: AstrMessageEvent):
+        """查看最近已结束比赛的赛果。"""
+        async for result in EsportsPredictionMixin.esports_results(self, event):
+            yield result
+
     @filter.command("竞猜排行")
     async def esports_leaderboard_command(self, event: AstrMessageEvent):
         """查看盈利、命中率与总返还排行榜。"""
@@ -3021,16 +3126,52 @@ class PointSystemPlugin(
             if group_member_changed:
                 await self._save_data_locked()
 
-        yield self._plain_result(event, 
-            self._format_msg(
-                "query_points",
-                user=reply_name,
-                total=total_points,
-                streak=streak,
-                total_sign_in_days=total_sign_in_days,
-                sign_in_status=sign_in_status,
-            )
+        yield self._plain_result(
+            event,
+            "\n".join(
+                [
+                    "【我的积分】",
+                    f"用户：{reply_name}",
+                    f"余额：{total_points} {self._get_points_name()}",
+                    f"签到：{sign_in_status}",
+                    f"连续签到：{streak} 天",
+                    f"累计签到：{total_sign_in_days} 天",
+                ]
+            ),
         )
+
+    @filter.command("积分记录", alias={"积分明细"})
+    async def point_history(self, event: AstrMessageEvent):
+        """查看自己最近五次积分增减记录。"""
+        user_id = self._normalize_user_id(event.get_sender_id())
+        points_name = self._get_points_name()
+        async with self._data_lock:
+            balance = self._get_user_record(user_id)["points"]
+            records = [
+                item
+                for item in self.data.setdefault("point_transactions", [])
+                if isinstance(item, dict) and item.get("user_id") == user_id
+            ][-POINT_HISTORY_LIMIT:]
+
+        if not records:
+            yield self._plain_result(
+                event,
+                f"【最近积分记录】\n当前余额：{balance} {points_name}\n\n暂无积分变动记录。",
+            )
+            return
+
+        lines = [f"【最近积分记录】", f"当前余额：{balance} {points_name}", ""]
+        for index, record in enumerate(reversed(records), start=1):
+            delta = self._normalize_signed_int(record.get("delta"), 0)
+            created_at = self._parse_datetime(record.get("created_at"))
+            time_text = created_at.strftime("%m-%d %H:%M") if created_at else "时间未知"
+            lines.extend(
+                [
+                    f"{index}. {delta:+d} {points_name}｜{record.get('source', '未知来源')}",
+                    f"   {time_text}｜余额 {self._normalize_signed_int(record.get('balance'), 0)}",
+                ]
+            )
+        yield self._plain_result(event, "\n".join(lines))
 
     @filter.command("积分规则")
     async def points_rules(self, event: AstrMessageEvent):
@@ -3147,7 +3288,7 @@ class PointSystemPlugin(
             f"{negative_rule_no}. 负分规则：负分用户只能通过每日签到恢复积分，无法参与抽奖；"
             "在已记录群聊中会自动佩戴“群女仆X号”头衔，转正后自动移除。"
         )
-        yield self._plain_result(event, "；".join(lines))
+        yield self._plain_result(event, "\n".join(lines))
 
     @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE, priority=100000)
     async def on_private_message_remember_target(self, event: AstrMessageEvent):
@@ -3239,6 +3380,12 @@ class PointSystemPlugin(
                 return
 
             user_info["points"] += activity_cfg["points_per_message"]
+            self._record_point_transaction_locked(
+                user_id,
+                activity_cfg["points_per_message"],
+                "群聊活跃",
+                balance=user_info["points"],
+            )
             user_info["activity_points"] += activity_cfg["points_per_message"]
             user_info["last_active_reward_at"] = now.isoformat(timespec="seconds")
             user_info["last_active_reward_date"] = today
@@ -3298,7 +3445,7 @@ class PointSystemPlugin(
             else:
                 lines.append("您暂未上榜")
 
-        yield self._plain_result(event, "；".join(lines))
+        yield self._plain_result(event, "\n".join(lines))
 
     @filter.command("兑换头衔")
     async def exchange_title(self, event: AstrMessageEvent):
@@ -3327,7 +3474,7 @@ class PointSystemPlugin(
             return
 
         success, remaining_points = await self._deduct_sender_points(
-            event, exchange_cfg["title_cost"]
+            event, exchange_cfg["title_cost"], "兑换群头衔"
         )
         if not success:
             yield self._plain_result(event, 
@@ -3345,7 +3492,7 @@ class PointSystemPlugin(
             )
         except Exception as exc:
             refunded_points = await self._refund_sender_points(
-                event, exchange_cfg["title_cost"]
+                event, exchange_cfg["title_cost"], "群头衔兑换失败退款"
             )
             logger.warning(f"积分兑换头衔失败，已自动退款: {exc}")
             yield self._plain_result(event, 
@@ -3518,6 +3665,12 @@ class PointSystemPlugin(
                 delivered_content = ""
             else:
                 user_info["points"] -= item["cost"]
+                transaction = self._record_point_transaction_locked(
+                    sender_id,
+                    -item["cost"],
+                    f"兑换：{item['name']}",
+                    balance=user_info["points"],
+                )
                 remaining_points = user_info["points"]
                 now = datetime.datetime.now().isoformat(timespec="seconds")
                 redemption = {
@@ -3546,6 +3699,8 @@ class PointSystemPlugin(
                 if not await self._save_data_locked():
                     redemptions.pop()
                     user_info["points"] += item["cost"]
+                    if transaction in self.data.setdefault("point_transactions", []):
+                        self.data["point_transactions"].remove(transaction)
                     delivered_content = ""
                     redemption_record = None
                     result_error = "兑换记录保存失败，本次未扣除积分，请稍后再试。"
@@ -3639,7 +3794,7 @@ class PointSystemPlugin(
             return
 
         success, remaining_points = await self._deduct_sender_points(
-            event, exchange_cfg["essence_cost"]
+            event, exchange_cfg["essence_cost"], "兑换群精华"
         )
         if not success:
             yield self._plain_result(event, 
@@ -3652,7 +3807,7 @@ class PointSystemPlugin(
             await event.bot.set_essence_msg(message_id=reply_message_id)
         except Exception as exc:
             refunded_points = await self._refund_sender_points(
-                event, exchange_cfg["essence_cost"]
+                event, exchange_cfg["essence_cost"], "群精华兑换失败退款"
             )
             logger.warning(f"积分兑换设精失败，已自动退款: {exc}")
             yield self._plain_result(event, 
@@ -3696,7 +3851,7 @@ class PointSystemPlugin(
             return
 
         success, remaining_points = await self._deduct_sender_points(
-            event, exchange_cfg["mute_cost"]
+            event, exchange_cfg["mute_cost"], "兑换群禁言"
         )
         if not success:
             yield self._plain_result(event, 
@@ -3713,7 +3868,7 @@ class PointSystemPlugin(
             )
         except Exception as exc:
             refunded_points = await self._refund_sender_points(
-                event, exchange_cfg["mute_cost"]
+                event, exchange_cfg["mute_cost"], "群禁言兑换失败退款"
             )
             logger.warning(f"积分兑换禁言失败，已自动退款: {exc}")
             yield self._plain_result(event, 
@@ -3771,6 +3926,7 @@ class PointSystemPlugin(
             yield self._plain_result(
                 event,
                 "红包类型暂不识别，请使用“固定”“拼手气”或“口令”。"
+                + "\n"
                 + self._red_packet_help(),
             )
             return
@@ -3783,11 +3939,11 @@ class PointSystemPlugin(
             first_amount = int(parts[1])
             count = int(parts[2])
         except (TypeError, ValueError):
-            yield self._plain_result(event, "积分和份数需要填写正整数。" + self._red_packet_help())
+            yield self._plain_result(event, "积分和份数需要填写正整数。\n" + self._red_packet_help())
             return
 
         if first_amount <= 0 or count <= 0:
-            yield self._plain_result(event, "积分和份数需要填写正整数。" + self._red_packet_help())
+            yield self._plain_result(event, "积分和份数需要填写正整数。\n" + self._red_packet_help())
             return
         if count > settings["max_count"]:
             yield self._plain_result(
@@ -4017,12 +4173,20 @@ class PointSystemPlugin(
                             }
                         )
                         self._get_user_record(sender_id)["points"] += amount
+                        transaction = self._record_point_transaction_locked(
+                            sender_id,
+                            amount,
+                            "领取积分红包",
+                            balance=self._get_user_record(sender_id)["points"],
+                        )
                         if not await self._save_data_locked():
                             packet["remaining_points"] = old_remaining_points
                             packet["remaining_count"] = old_remaining_count
                             claimed_user_ids.pop()
                             claimed_records.pop()
                             self._get_user_record(sender_id)["points"] = old_points
+                            if transaction in self.data.setdefault("point_transactions", []):
+                                self.data["point_transactions"].remove(transaction)
                             claim_error = "红包领取记录保存失败，请稍后再试。"
                         else:
                             remaining_count = packet["remaining_count"]
@@ -4142,9 +4306,18 @@ class PointSystemPlugin(
             if is_add:
                 user_info["points"] += amount
                 action_str = "增加"
+                delta = amount
             else:
                 user_info["points"] -= amount
                 action_str = "扣除"
+                delta = -amount
+
+            self._record_point_transaction_locked(
+                target_uid,
+                delta,
+                f"管理员{action_str}",
+                balance=user_info["points"],
+            )
 
             await self._save_data_locked()
             current_points = user_info["points"]

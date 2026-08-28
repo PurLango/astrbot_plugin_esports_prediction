@@ -277,6 +277,12 @@ class LotteryFeatureMixin:
                 continue
             user_info = self._get_user_record(user_id)
             user_info["points"] += paid_points
+            self._record_point_transaction_locked(
+                user_id,
+                paid_points,
+                "群体抽奖跨日退款",
+                balance=user_info["points"],
+            )
             refunded_count += 1
 
         pool["date"] = ""
@@ -362,8 +368,13 @@ class LotteryFeatureMixin:
                     prize, reward_points = self._roll_lottery_prize(
                         lottery_cfg["personal_prizes"]
                     )
-                    user_info["points"] = (
-                        user_info["points"] - lottery_cfg["personal_cost"] + reward_points
+                    net_change = reward_points - lottery_cfg["personal_cost"]
+                    user_info["points"] += net_change
+                    self._record_point_transaction_locked(
+                        user_id,
+                        net_change,
+                        f"个人抽奖：{prize['label']}",
+                        balance=user_info["points"],
                     )
                     user_info["last_personal_lottery_date"] = today
                     user_info["daily_personal_lottery_times"] = user_draw_times + 1
@@ -377,17 +388,14 @@ class LotteryFeatureMixin:
                         f"remaining={user_info['points']}"
                     )
 
-                    net_change = reward_points - lottery_cfg["personal_cost"]
-                    net_text = (
-                        f"净赚 {net_change}"
-                        if net_change >= 0
-                        else f"净变化 {net_change}"
-                    )
                     message = (
-                        f"{reply_name}在个人抽奖中抽中了{prize['label']}，获得 {reward_points} {points_name}。"
-                        f"本次消耗 {lottery_cfg['personal_cost']} {points_name}，"
-                        f"{net_text} {points_name}，"
-                        f"当前余额 {user_info['points']} {points_name}。"
+                        "【个人抽奖结果】\n"
+                        f"用户：{reply_name}\n"
+                        f"奖项：{prize['label']}\n"
+                        f"获得：{reward_points} {points_name}\n"
+                        f"消耗：{lottery_cfg['personal_cost']} {points_name}\n"
+                        f"净变化：{net_change:+d} {points_name}\n"
+                        f"余额：{user_info['points']} {points_name}"
                     )
             else:
                 groups = self.data.setdefault("groups", {})
@@ -436,6 +444,12 @@ class LotteryFeatureMixin:
                     )
                 else:
                     user_info["points"] -= lottery_cfg["group_cost"]
+                    self._record_point_transaction_locked(
+                        user_id,
+                        -lottery_cfg["group_cost"],
+                        "参与群体抽奖",
+                        balance=user_info["points"],
+                    )
                     user_info["last_group_lottery_join_date"] = today
                     user_info["daily_group_lottery_join_times"] = group_join_times + 1
                     participants.append(
@@ -489,6 +503,12 @@ class LotteryFeatureMixin:
                                 0,
                             )
                             target_user["points"] += reward_points
+                            self._record_point_transaction_locked(
+                                target_user_id,
+                                reward_points,
+                                "群体抽奖返还",
+                                balance=target_user["points"],
+                            )
                             target_user["lottery_draw_count"] += 1
                             target_user["lottery_points_spent"] += paid_points
                             target_user["lottery_points_won"] += reward_points
@@ -523,9 +543,9 @@ class LotteryFeatureMixin:
                             lines.append(
                                 f"第{index}位：{display_name}，获得 {reward_points} {points_name}"
                             )
-                        message = "；".join(lines)
+                        message = "【群体抽奖结果】\n" + "\n".join(lines)
 
-        yield self._plain_result(event, self._single_line_message(message))
+        yield self._plain_result(event, message)
 
     async def lottery(self, event: AstrMessageEvent):
         """消耗积分进行一次抽奖。"""
