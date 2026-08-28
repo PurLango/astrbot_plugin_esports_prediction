@@ -1124,6 +1124,53 @@ class EsportsPredictionMixin:
             ]
         )
 
+    def _select_matches_for_display(
+        self, matches: list[Dict[str, Any]], limit: int = 10
+    ) -> list[Dict[str, Any]]:
+        if len(matches) <= limit:
+            return matches
+        grouped: Dict[str, list[Dict[str, Any]]] = {}
+        for match in matches:
+            game = str(match.get("game", "") or "other").lower()
+            grouped.setdefault(game, []).append(match)
+        if len(grouped) <= 1:
+            return matches[:limit]
+
+        quota = max(1, limit // len(grouped))
+        selected = [match for group in grouped.values() for match in group[:quota]]
+        selected_ids = {str(match.get("id", "")) for match in selected}
+        remaining = [
+            match
+            for match in matches
+            if str(match.get("id", "")) not in selected_ids
+        ]
+        selected.extend(remaining[: max(0, limit - len(selected))])
+        selected = selected[:limit]
+        return sorted(
+            selected,
+            key=lambda item: self._parse_esports_datetime(item.get("start_time"))
+            or datetime.datetime.max.replace(tzinfo=datetime.timezone.utc),
+        )
+
+    def _esports_help_message(self) -> str:
+        return "\n".join(
+            [
+                "赛事竞猜使用方法",
+                "",
+                "查看比赛：/今日赛事",
+                "参与竞猜：/竞猜 L001 TES 100",
+                "追加同队：再次输入相同竞猜指令",
+                "改选队伍：/改选 L001 BLG",
+                "撤销竞猜：/撤销竞猜 L001",
+                "查看记录：/我的竞猜",
+                "查看排行：/竞猜排行",
+                "查看规则：/竞猜规则",
+            ]
+        )
+
+    async def esports_help(self, event: AstrMessageEvent):
+        yield event.plain_result(self._esports_help_message())
+
     async def esports_matches(self, event: AstrMessageEvent):
         settings = self._get_esports_settings()
         if not settings["enabled"]:
@@ -1138,7 +1185,7 @@ class EsportsPredictionMixin:
                 for item in matches
                 if self._parse_esports_datetime(item.get("start_time")).astimezone(offset).date() == today
             ]
-            selected = matches[:10]
+            selected = self._select_matches_for_display(matches)
             blocks = [self._format_match_line_locked(item) for item in selected]
         if not blocks:
             yield self._plain_result(event, "当前没有已收录的待竞猜赛事。管理员可以先同步或手动添加比赛。")
@@ -1155,7 +1202,7 @@ class EsportsPredictionMixin:
     async def esports_bet(self, event: AstrMessageEvent):
         args = self._get_command_args(event).split()
         if len(args) < 3:
-            yield self._plain_result(event, "用法：/竞猜 比赛编号 战队缩写 积分")
+            yield event.plain_result(self._esports_help_message())
             return
         try:
             amount = int(args[-1])

@@ -65,6 +65,21 @@ def add_future_match(plugin, hours=3):
 
 
 class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_bet_without_arguments_returns_usage_help(self):
+        plugin = build_plugin()
+
+        reply = await anext(plugin.esports_bet(FakeEvent("/竞猜")))
+
+        self.assertIn("赛事竞猜使用方法", reply)
+        self.assertIn("/今日赛事", reply)
+        self.assertIn("/竞猜 L001 TES 100", reply)
+        self.assertIn("/改选 L001 BLG", reply)
+        self.assertIn("/撤销竞猜 L001", reply)
+
+    async def test_esports_prediction_help_is_registered_as_a_chat_command(self):
+        self.assertIn("赛事竞猜", REGISTERED_COMMAND_NAMES)
+        self.assertTrue(hasattr(PointSystemPlugin, "esports_help_command"))
+
     async def test_today_matches_use_readable_multiline_blocks(self):
         plugin = build_plugin()
         match = add_future_match(plugin)
@@ -78,6 +93,32 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(" vs TES ", reply)
         self.assertIn("\n\n竞猜：/竞猜 ", reply)
         self.assertNotIn("赛事详情", reply)
+
+    async def test_today_matches_reserve_space_for_each_available_game(self):
+        plugin = build_plugin()
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 28, 0, 0, tzinfo=datetime.timezone.utc
+        )
+        lol_matches = [
+            plugin._create_manual_match_locked(
+                "lol",
+                "LPL",
+                f"LPL-A{index}",
+                f"LPL-B{index}",
+                f"2026-08-29 {10 + index:02d}:00",
+            )
+            for index in range(10)
+        ]
+        valorant_match = plugin._create_manual_match_locked(
+            "valorant", "VCT", "EDG", "PRX", "2026-08-30 20:00"
+        )
+
+        reply = await anext(plugin.esports_matches(FakeEvent("/今日赛事")))
+
+        self.assertIn("（10 场）", reply)
+        self.assertIn(valorant_match["display_id"], reply)
+        self.assertIn("｜VALORANT】", reply)
+        self.assertNotIn(lol_matches[-1]["display_id"], reply)
 
     async def test_match_detail_is_not_registered_as_a_chat_command(self):
         self.assertNotIn("赛事详情", REGISTERED_COMMAND_NAMES)
