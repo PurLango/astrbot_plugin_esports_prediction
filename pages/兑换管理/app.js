@@ -60,6 +60,28 @@
       { path: "lottery_settings.group_daily_limit_per_user", label: "群体每日次数", hint: "每位用户每天最多参与次数", type: "number", min: 1 },
       { path: "lottery_settings.group_required_participants", label: "开奖所需人数", hint: "达到人数后自动开奖", type: "number", min: 1 },
     ] },
+    { id: "lotteryPrizes", label: "个人奖池", icon: "trophy", description: "设置五档奖项的名称、奖励区间和抽取权重。概率及期望返还会自动计算。", summary: "personalLottery", fields: [
+      { path: "lottery_settings.personal_prizes.first.label", label: "一等奖名称", hint: "展示给中奖用户的奖项名称", type: "text" },
+      { path: "lottery_settings.personal_prizes.first.min_points", label: "一等奖下限", hint: "该奖项最少获得的积分", type: "number", min: 0 },
+      { path: "lottery_settings.personal_prizes.first.max_points", label: "一等奖上限", hint: "该奖项最多获得的积分", type: "number", min: 0 },
+      { path: "lottery_settings.personal_prizes.first.weight", label: "一等奖权重", hint: "相对权重；填 0 表示不会抽中", type: "number", min: 0, step: 0.1 },
+      { path: "lottery_settings.personal_prizes.second.label", label: "二等奖名称", hint: "展示给中奖用户的奖项名称", type: "text" },
+      { path: "lottery_settings.personal_prizes.second.min_points", label: "二等奖下限", hint: "该奖项最少获得的积分", type: "number", min: 0 },
+      { path: "lottery_settings.personal_prizes.second.max_points", label: "二等奖上限", hint: "该奖项最多获得的积分", type: "number", min: 0 },
+      { path: "lottery_settings.personal_prizes.second.weight", label: "二等奖权重", hint: "相对权重；填 0 表示不会抽中", type: "number", min: 0, step: 0.1 },
+      { path: "lottery_settings.personal_prizes.third.label", label: "三等奖名称", hint: "展示给中奖用户的奖项名称", type: "text" },
+      { path: "lottery_settings.personal_prizes.third.min_points", label: "三等奖下限", hint: "该奖项最少获得的积分", type: "number", min: 0 },
+      { path: "lottery_settings.personal_prizes.third.max_points", label: "三等奖上限", hint: "该奖项最多获得的积分", type: "number", min: 0 },
+      { path: "lottery_settings.personal_prizes.third.weight", label: "三等奖权重", hint: "相对权重；填 0 表示不会抽中", type: "number", min: 0, step: 0.1 },
+      { path: "lottery_settings.personal_prizes.fourth.label", label: "四等奖名称", hint: "展示给中奖用户的奖项名称", type: "text" },
+      { path: "lottery_settings.personal_prizes.fourth.min_points", label: "四等奖下限", hint: "该奖项最少获得的积分", type: "number", min: 0 },
+      { path: "lottery_settings.personal_prizes.fourth.max_points", label: "四等奖上限", hint: "该奖项最多获得的积分", type: "number", min: 0 },
+      { path: "lottery_settings.personal_prizes.fourth.weight", label: "四等奖权重", hint: "相对权重；填 0 表示不会抽中", type: "number", min: 0, step: 0.1 },
+      { path: "lottery_settings.personal_prizes.fifth.label", label: "五等奖名称", hint: "展示给中奖用户的奖项名称", type: "text" },
+      { path: "lottery_settings.personal_prizes.fifth.min_points", label: "五等奖下限", hint: "该奖项最少获得的积分", type: "number", min: 0 },
+      { path: "lottery_settings.personal_prizes.fifth.max_points", label: "五等奖上限", hint: "该奖项最多获得的积分", type: "number", min: 0 },
+      { path: "lottery_settings.personal_prizes.fifth.weight", label: "五等奖权重", hint: "相对权重；填 0 表示不会抽中", type: "number", min: 0, step: 0.1 },
+    ] },
     { id: "birthday", label: "生日功能", icon: "cake-slice", description: "管理生日签到奖励和寿星播报。", fields: [
       { path: "birthday_settings.enabled", label: "启用生日功能", hint: "开放生日记录与生日签到", type: "boolean" },
       { path: "birthday_settings.reward_points", label: "生日签到奖励", hint: "生日当天签到的额外积分", type: "number", min: 0 },
@@ -775,8 +797,33 @@
     const nav = $("#settingsNav");
     const root = $("#settingsSections");
     nav.innerHTML = SETTINGS_SECTIONS.map((section, index) => `<button type="button" class="${index === 0 ? "active" : ""}" data-settings-target="${escapeHtml(section.id)}"><i data-lucide="${escapeHtml(section.icon)}"></i>${escapeHtml(section.label)}</button>`).join("");
-    root.innerHTML = SETTINGS_SECTIONS.map((section) => `<section id="settings-${escapeHtml(section.id)}" class="settings-section" data-settings-section="${escapeHtml(section.id)}"><div class="settings-section-heading"><span class="settings-section-icon"><i data-lucide="${escapeHtml(section.icon)}"></i></span><div><h3>${escapeHtml(section.label)}</h3><p>${escapeHtml(section.description)}</p></div></div><div class="settings-fields">${section.fields.map(renderSettingControl).join("")}</div></section>`).join("");
+    root.innerHTML = SETTINGS_SECTIONS.map((section) => `<section id="settings-${escapeHtml(section.id)}" class="settings-section" data-settings-section="${escapeHtml(section.id)}"><div class="settings-section-heading"><span class="settings-section-icon"><i data-lucide="${escapeHtml(section.icon)}"></i></span><div><h3>${escapeHtml(section.label)}</h3><p>${escapeHtml(section.description)}</p></div></div>${section.summary === "personalLottery" ? renderPersonalLotterySummary() : ""}<div class="settings-fields">${section.fields.map(renderSettingControl).join("")}</div></section>`).join("");
     icons();
+  }
+
+  function renderPersonalLotterySummary() {
+    const prizes = getPath(state.settingsDraft, "lottery_settings.personal_prizes") || {};
+    const keys = ["first", "second", "third", "fourth", "fifth"];
+    const rows = keys.map((key) => {
+      const prize = prizes[key] || {};
+      const weight = Math.max(Number(prize.weight || 0), 0);
+      const minimum = Math.max(Number(prize.min_points || 0), 0);
+      const maximum = Math.max(Number(prize.max_points || 0), 0);
+      return { label: String(prize.label || key), weight, average: (minimum + maximum) / 2 };
+    });
+    const totalWeight = rows.reduce((sum, row) => sum + row.weight, 0);
+    const expected = totalWeight > 0
+      ? rows.reduce((sum, row) => sum + (row.weight / totalWeight) * row.average, 0)
+      : 0;
+    const cost = Math.max(Number(getPath(state.settingsDraft, "lottery_settings.personal_cost") || 0), 0);
+    const returnRate = cost > 0 ? (expected / cost) * 100 : 0;
+    const probabilities = rows.map((row) => `<span><b>${escapeHtml(row.label)}</b>${totalWeight > 0 ? ((row.weight / totalWeight) * 100).toFixed(2) : "0.00"}%</span>`).join("");
+    return `<div class="lottery-summary" data-personal-lottery-summary><div><small>个人抽奖期望返还</small><strong>${expected.toFixed(2)} 积分</strong><em>单次成本 ${cost} · 返还率 ${returnRate.toFixed(1)}%</em></div><div class="lottery-probabilities">${probabilities}</div></div>`;
+  }
+
+  function updatePersonalLotterySummary() {
+    const current = $("[data-personal-lottery-summary]");
+    if (current) current.outerHTML = renderPersonalLotterySummary();
   }
 
   function renderSettingControl(field) {
@@ -815,6 +862,7 @@
     else value = input.value;
     setPath(state.settingsDraft, path, value);
     setSettingsDirty();
+    if (path === "lottery_settings.personal_cost" || path.startsWith("lottery_settings.personal_prizes.")) updatePersonalLotterySummary();
   }
 
   function switchView(view) {

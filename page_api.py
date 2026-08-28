@@ -11,6 +11,11 @@ from typing import Any
 from astrbot.api import logger
 from astrbot.api.web import request
 
+try:
+    from .lottery_feature import DEFAULT_PERSONAL_LOTTERY_PRIZES
+except ImportError:
+    from lottery_feature import DEFAULT_PERSONAL_LOTTERY_PRIZES
+
 
 PAGE_API_PREFIX = "/astrbot_plugin_point_system/page"
 
@@ -54,6 +59,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
         "group_enabled": True,
         "personal_cost": 20,
         "personal_daily_limit": 1,
+        "personal_prizes": copy.deepcopy(DEFAULT_PERSONAL_LOTTERY_PRIZES),
         "group_cost": 20,
         "group_daily_limit_per_user": 1,
         "group_required_participants": 5,
@@ -113,6 +119,10 @@ SETTINGS_MINIMUMS = {
     "activity_settings.daily_limit": 0,
     "birthday_settings.reward_points": 0,
     "red_packet_settings.expire_minutes": 0,
+}
+
+SETTINGS_FLOAT_MAXIMUMS = {
+    "sign_in_settings.fortune_event_chance": 1.0,
 }
 
 
@@ -205,68 +215,96 @@ class PointSystemPageApi:
         text = str(value or "").strip()
         return text[:10] if len(text) >= 10 else text
 
+    @staticmethod
+    def _merge_setting_defaults(default: Any, current: Any) -> Any:
+        if not isinstance(default, dict):
+            return copy.deepcopy(current)
+        current_dict = current if isinstance(current, dict) else {}
+        return {
+            key: PointSystemPageApi._merge_setting_defaults(
+                value, current_dict.get(key, value)
+            )
+            for key, value in default.items()
+        }
+
     def _settings_view(self) -> dict[str, Any]:
-        result = copy.deepcopy(SETTINGS_DEFAULTS)
-        for key, default in SETTINGS_DEFAULTS.items():
-            current = self.plugin.config.get(key, default)
-            if isinstance(default, dict):
-                if not isinstance(current, dict):
-                    continue
-                for child_key in default:
-                    if child_key in current:
-                        result[key][child_key] = copy.deepcopy(current[child_key])
-            elif key in self.plugin.config:
-                result[key] = copy.deepcopy(current)
-        return result
+        return {
+            key: self._merge_setting_defaults(
+                default, self.plugin.config.get(key, default)
+            )
+            for key, default in SETTINGS_DEFAULTS.items()
+        }
+
+    def _validate_setting_value(
+        self, path: str, value: Any, default: Any
+    ) -> tuple[Any, str]:
+        if isinstance(default, dict):
+            if not isinstance(value, dict):
+                return None, f"{path} 配置格式不正确"
+            result = {}
+            for child_key, child_default in default.items():
+                child_path = f"{path}.{child_key}" if path else child_key
+                child_value, error = self._validate_setting_value(
+                    child_path, value.get(child_key, child_default), child_default
+                )
+                if error:
+                    return None, error
+                result[child_key] = child_value
+            return result, ""
+        if path in SETTINGS_SELECTS:
+            normalized = str(value or "").strip().casefold()
+            return (
+                normalized if normalized in SETTINGS_SELECTS[path] else default,
+                "",
+            )
+        if isinstance(default, bool):
+            return self._bool(value, default), ""
+        if isinstance(default, int):
+            minimum = SETTINGS_MINIMUMS.get(
+                path,
+                0 if path.startswith("lottery_settings.personal_prizes.") else 1,
+            )
+            return self._int(value, default, minimum, 1_000_000_000), ""
+        if isinstance(default, float):
+            maximum = SETTINGS_FLOAT_MAXIMUMS.get(path, 1_000_000_000.0)
+            return self._float(value, default, 0.0, maximum), ""
+        if isinstance(default, list):
+            values = (
+                value if isinstance(value, list) else str(value or "").splitlines()
+            )
+            return [
+                self._text(item, 500) for item in values if self._text(item, 500)
+            ][:1000], ""
+        return self._text(value, 120 if "." not in path else 4000), ""
 
     def _validate_settings(self, raw_settings: Any) -> tuple[dict[str, Any], str]:
         if not isinstance(raw_settings, dict):
             return {}, "配置数据格式不正确"
 
-        current = self._settings_view()
-        result = copy.deepcopy(current)
+        result = self._settings_view()
         for key, default in SETTINGS_DEFAULTS.items():
             if key not in raw_settings:
                 continue
-            raw_value = raw_settings[key]
-            if isinstance(default, dict):
-                if not isinstance(raw_value, dict):
-                    return {}, f"{key} 配置格式不正确"
-                for child_key, child_default in default.items():
-                    if child_key not in raw_value:
-                        continue
-                    path = f"{key}.{child_key}"
-                    value = raw_value[child_key]
-                    if path in SETTINGS_SELECTS:
-                        normalized = str(value or "").strip().casefold()
-                        result[key][child_key] = (
-                            normalized
-                            if normalized in SETTINGS_SELECTS[path]
-                            else child_default
-                        )
-                    elif isinstance(child_default, bool):
-                        result[key][child_key] = self._bool(value, child_default)
-                    elif isinstance(child_default, int):
-                        minimum = SETTINGS_MINIMUMS.get(path, 1)
-                        result[key][child_key] = self._int(
-                            value, child_default, minimum, 1_000_000_000
-                        )
-                    elif isinstance(child_default, float):
-                        result[key][child_key] = self._float(
-                            value, child_default, 0.0, 1.0
-                        )
-                    elif isinstance(child_default, list):
-                        values = value if isinstance(value, list) else str(value or "").splitlines()
-                        result[key][child_key] = [
-                            self._text(item, 500) for item in values if self._text(item, 500)
-                        ][:1000]
-                    else:
-                        result[key][child_key] = self._text(value, 4000)
-            elif isinstance(default, str):
-                result[key] = self._text(raw_value, 120)
+            candidate = self._merge_setting_defaults(result[key], raw_settings[key])
+            value, error = self._validate_setting_value(
+                key, candidate, default
+            )
+            if error:
+                return {}, error
+            result[key] = value
 
         if not result["points_name"]:
             return {}, "积分名称不能为空"
+        prizes = result["lottery_settings"]["personal_prizes"]
+        total_weight = 0.0
+        for prize in prizes.values():
+            if not prize["label"]:
+                return {}, "个人抽奖奖项名称不能为空"
+            if prize["min_points"] > prize["max_points"]:
+                return {}, f"{prize['label']}的积分下限不能大于上限"
+            total_weight += prize["weight"]
+        if total_weight <= 0:
+            return {}, "个人抽奖至少一个奖项权重需要大于 0"
         return result, ""
 
     def _config_revision(self) -> str:

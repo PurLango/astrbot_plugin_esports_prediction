@@ -32,6 +32,14 @@ class IntegratedEsportsPageTests(unittest.TestCase):
     def test_legacy_standalone_esports_page_is_removed(self):
         self.assertFalse((ROOT / "pages" / "竞猜管理" / "index.html").exists())
 
+    def test_operations_console_contains_personal_lottery_prize_editor(self):
+        script = (ROOT / "pages" / "兑换管理" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("lottery_settings.personal_prizes.first.label", script)
+        self.assertIn("lottery_settings.personal_prizes.fifth.weight", script)
+        self.assertIn("个人抽奖期望返还", script)
+
 
 if __name__ == "__main__":
     unittest.main()

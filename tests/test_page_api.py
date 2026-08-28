@@ -129,12 +129,49 @@ class PageApiTests(unittest.TestCase):
         self.assertEqual(error, "")
         self.assertEqual(items[0]["__template_key"], "default")
 
-    def test_common_settings_do_not_include_advanced_lottery_prizes(self):
+    def test_common_settings_include_complete_personal_lottery_prizes(self):
         settings, error = self.api._validate_settings(self.api._settings_view())
 
         self.assertEqual(error, "")
-        self.assertNotIn("personal_prizes", settings["lottery_settings"])
-        self.assertIn("personal_prizes", self.plugin.config["lottery_settings"])
+        prizes = settings["lottery_settings"]["personal_prizes"]
+        self.assertEqual(prizes["first"]["weight"], 1.0)
+        self.assertEqual(prizes["fifth"]["label"], "五等奖")
+        self.assertEqual(len(prizes), 5)
+
+    def test_personal_lottery_prizes_validate_ranges_and_weights(self):
+        settings = self.api._settings_view()
+        prizes = settings["lottery_settings"]["personal_prizes"]
+        prizes["first"].update(
+            {
+                "label": "特等奖",
+                "min_points": 120,
+                "max_points": 150,
+                "weight": 1.5,
+            }
+        )
+
+        validated, error = self.api._validate_settings(settings)
+
+        self.assertEqual(error, "")
+        self.assertEqual(
+            validated["lottery_settings"]["personal_prizes"]["first"],
+            {
+                "label": "特等奖",
+                "min_points": 120,
+                "max_points": 150,
+                "weight": 1.5,
+            },
+        )
+
+        prizes["first"]["min_points"] = 151
+        _, error = self.api._validate_settings(settings)
+        self.assertIn("下限不能大于上限", error)
+
+        prizes["first"]["min_points"] = 120
+        for prize in prizes.values():
+            prize["weight"] = 0
+        _, error = self.api._validate_settings(settings)
+        self.assertIn("至少一个奖项权重", error)
 
 
 if __name__ == "__main__":

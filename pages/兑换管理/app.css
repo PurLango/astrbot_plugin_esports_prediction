@@ -419,6 +419,14 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
 .setting-switch input::after { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); content: ""; transition: transform .18s ease; }
 .setting-switch input:checked { border-color: var(--green); background: var(--green); }
 .setting-switch input:checked::after { transform: translateX(16px); }
+.lottery-summary { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(0, 1.3fr); gap: 18px; margin: 0 0 16px; padding: 15px 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-soft); }
+.lottery-summary small, .lottery-summary strong, .lottery-summary em { display: block; }
+.lottery-summary small { color: var(--muted); font-size: 9px; font-weight: 750; }
+.lottery-summary strong { margin-top: 4px; color: var(--green-strong); font-size: 20px; }
+.lottery-summary em { margin-top: 3px; color: var(--faint); font-size: 9px; font-style: normal; }
+.lottery-probabilities { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; align-content: center; }
+.lottery-probabilities span { min-width: 0; padding: 8px 6px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); background: var(--panel); font-size: 9px; text-align: center; }
+.lottery-probabilities b { display: block; overflow: hidden; margin-bottom: 3px; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
 
 .esports-heading { align-items: center; }
 .esports-heading-actions { display: flex; align-items: center; gap: 10px; }
@@ -498,6 +506,8 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
   .economy-band { grid-template-columns: 1fr; }
   .settings-layout { grid-template-columns: 176px minmax(0, 1fr); }
   .settings-fields { grid-template-columns: 1fr; }
+  .lottery-summary { grid-template-columns: 1fr; }
+  .lottery-probabilities { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .esports-control-grid { grid-template-columns: 1fr; }
   .metric-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metric:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }
@@ -569,6 +579,7 @@ svg { width: 18px; height: 18px; stroke-width: 1.8; }
   .settings-section { padding: 20px 14px; }
   .setting-control { grid-template-columns: 1fr; gap: 7px; }
   .setting-switch { justify-content: flex-start; }
+  .lottery-probabilities { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metric { min-height: 72px; padding: 11px; }
   .metric-icon { width: 32px; height: 32px; flex-basis: 32px; }
   .metric strong { font-size: 19px; }
