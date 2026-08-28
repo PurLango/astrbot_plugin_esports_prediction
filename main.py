@@ -1614,13 +1614,14 @@ class PointSystemPlugin(
 
         raw_ids = admin_cfg.get("points_admin_ids", [])
         if isinstance(raw_ids, str):
-            raw_values = [item.strip() for item in raw_ids.split(",")]
+            raw_values = re.split(r"[,，;；\s]+", raw_ids)
         elif isinstance(raw_ids, list):
-            raw_values = [str(item).strip() for item in raw_ids]
+            raw_values = raw_ids
         else:
             raw_values = []
 
-        return {item for item in raw_values if item.isdigit()}
+        normalized = {self._normalize_user_id(item) for item in raw_values}
+        return {item for item in normalized if item.isdigit()}
 
     def _get_red_packet_settings(self) -> Dict[str, Any]:
         packet_cfg = self.config.get("red_packet_settings", {})
@@ -2677,8 +2678,23 @@ class PointSystemPlugin(
         if not admin_ids:
             return "当前未配置积分管理员名单，请先在插件配置中填写 admin_settings.points_admin_ids。"
 
-        if str(event.get_sender_id()) not in admin_ids:
-            return "你没有积分管理权限。"
+        detected_sender_id = self._normalize_user_id(event.get_sender_id())
+        sender_ids = {detected_sender_id}
+        message_sender = getattr(getattr(event, "message_obj", None), "sender", None)
+        if isinstance(message_sender, dict):
+            raw_user_id = message_sender.get("user_id")
+        else:
+            raw_user_id = getattr(message_sender, "user_id", None)
+        normalized_raw_user_id = self._normalize_user_id(raw_user_id)
+        if normalized_raw_user_id.isdigit():
+            sender_ids.add(normalized_raw_user_id)
+
+        if admin_ids.isdisjoint(sender_ids):
+            return (
+                "你没有积分管理权限。"
+                f"当前消息账号 ID：{detected_sender_id or '未知'}，"
+                "请将该 ID 填入积分管理员列表。"
+            )
 
         return None
 
