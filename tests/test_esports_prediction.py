@@ -277,10 +277,6 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
                 "game": "valorant",
                 "_filter_text": "vct 2026 stage 2 pacific",
             },
-            {"game": "valorant", "_filter_text": "valorant 2026 pacific stage 2 playoffs"},
-            {"game": "valorant", "_filter_text": "valorant 2026 emea kickoff"},
-            {"game": "valorant", "_filter_text": "valorant 2026 americas regular season"},
-            {"game": "valorant", "_filter_text": "valorant 2026 china stage 1"},
         ]
         rejected = [
             {"game": "lol", "_filter_text": "lck challengers league 2026"},
@@ -289,11 +285,52 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
             {"game": "valorant", "_filter_text": "vct challengers 2026 japan"},
             {"game": "valorant", "_filter_text": "vct ascension 2026 pacific"},
             {"game": "valorant", "_filter_text": "valorant game changers 2026 china"},
+            {"game": "valorant", "_filter_text": "valorant 2026 pacific stage 2 playoffs"},
+            {"game": "valorant", "_filter_text": "valorant 2026 emea kickoff"},
+            {"game": "valorant", "_filter_text": "valorant 2026 americas regular season"},
+            {"game": "valorant", "_filter_text": "valorant 2026 china stage 1"},
             {"game": "valorant", "_filter_text": "valorant pacific invitational"},
         ]
 
         self.assertTrue(all(plugin._is_tier_one_match(match) for match in accepted))
         self.assertFalse(any(plugin._is_tier_one_match(match) for match in rejected))
+
+    async def test_current_vct_is_not_rejected_by_pandascore_legacy_challengers_slug(self):
+        plugin = build_plugin()
+        match = plugin._normalize_pandascore_match(
+            "valorant",
+            {
+                "id": 1619634,
+                "status": "not_started",
+                "begin_at": "2026-08-29T11:00:00Z",
+                "name": "Lower Round 3",
+                "opponents": [
+                    {"opponent": {"id": 1, "name": "Gen.G Esports", "acronym": "GEN"}},
+                    {"opponent": {"id": 2, "name": "T1", "acronym": "T1"}},
+                ],
+                "league": {
+                    "id": 4948,
+                    "name": "VCT",
+                    "slug": "valorant-vct-2021-north-america-stage-1-challengers-1",
+                },
+                "serie": {
+                    "name": "Pacific Stage 2 2026",
+                    "slug": "valorant-vct-2021-north-america-stage-1-challengers-1-pacific-stage-2-2026",
+                },
+                "tournament": {
+                    "name": "Playoffs",
+                    "slug": "valorant-vct-2021-north-america-stage-1-challengers-1-pacific-stage-2-2026-playoffs",
+                    "tier": "b",
+                },
+            },
+        )
+
+        self.assertIsNotNone(match)
+        self.assertTrue(plugin._is_tier_one_match(match))
+        lower_tier = copy.deepcopy(match)
+        lower_tier["competition"] = "VCL · EMEA Stage 1 2026 · Group C"
+        lower_tier["stage"] = "Group C"
+        self.assertFalse(plugin._is_tier_one_match(lower_tier))
 
     async def test_tier_one_league_discovery_excludes_lower_tiers(self):
         plugin = build_plugin()
@@ -703,66 +740,6 @@ class TargetedHistoryProvider:
 
 
 class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
-    async def test_generic_pandascore_vct_regions_reach_today_matches(self):
-        class GenericVctProvider:
-            def __init__(self, token, **kwargs):
-                pass
-
-            async def fetch_leagues(self, game, **kwargs):
-                return []
-
-            async def fetch_matches(self, game, state, **kwargs):
-                if game != "valorant" or state != "upcoming":
-                    return []
-                regions = ("Pacific", "EMEA", "Americas", "China")
-                return [
-                    {
-                        "id": 800001 + index,
-                        "status": "not_started",
-                        "begin_at": f"2026-08-29T{8 + index:02d}:00:00Z",
-                        "opponents": [
-                            {
-                                "id": 810001 + index * 2,
-                                "name": f"{region} Alpha",
-                                "acronym": f"{region[:2].upper()}A",
-                            },
-                            {
-                                "id": 810002 + index * 2,
-                                "name": f"{region} Beta",
-                                "acronym": f"{region[:2].upper()}B",
-                            },
-                        ],
-                        "league": {
-                            "id": 8000 + index,
-                            "name": "Valorant",
-                            "slug": "valorant",
-                        },
-                        "serie": {"name": f"2026: {region} Stage 2"},
-                        "tournament": {"name": "Playoffs", "tier": "b"},
-                    }
-                    for index, region in enumerate(regions)
-                ]
-
-        plugin = build_plugin()
-        plugin._utcnow = lambda: datetime.datetime(
-            2026, 8, 29, 6, 40, tzinfo=datetime.timezone.utc
-        )
-        original = esports_feature.PandaScoreProvider
-        esports_feature.PandaScoreProvider = GenericVctProvider
-        try:
-            result = await plugin._sync_esports_once("通用 VCT 区域赛同步")
-        finally:
-            esports_feature.PandaScoreProvider = original
-
-        reply = await anext(plugin.esports_matches(FakeEvent("/今日赛事 瓦")))
-
-        self.assertEqual(result["game_counts"]["valorant"]["accepted"], 4)
-        self.assertEqual(result["game_counts"]["valorant"]["available"], 4)
-        self.assertEqual(len(plugin._visible_upcoming_matches_locked()), 4)
-        self.assertIn("无畏契约今日及近期可竞猜赛事（4 场）", reply)
-        self.assertIn("PAA", reply)
-        self.assertIn("EMA", reply)
-
     async def test_vct_sync_does_not_depend_on_partial_league_catalog(self):
         class PartialCatalogProvider:
             calls = []

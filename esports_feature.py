@@ -551,10 +551,10 @@ class EsportsPredictionMixin:
         text = self._competition_filter_text(match)
         if game not in TIER_ONE_EXCLUSIONS:
             return False
-        if text and any(token in text for token in TIER_ONE_EXCLUSIONS[game]):
-            return False
         if game == "lol":
             if not text:
+                return False
+            if any(token in text for token in TIER_ONE_EXCLUSIONS[game]):
                 return False
             return bool(
                 re.search(
@@ -564,18 +564,28 @@ class EsportsPredictionMixin:
                     text,
                 )
             )
-        if not text:
+        current_names = self._competition_filter_text(
+            {
+                "_filter_text": " ".join(
+                    (
+                        str(match.get("competition", "") or ""),
+                        str(match.get("stage", "") or ""),
+                    )
+                )
+            }
+        )
+        current_names = current_names or text
+        if not current_names:
             return False
-        has_vct = re.search(r"\b(?:vct|valorant champions tour)\b", text)
+        if any(token in current_names for token in TIER_ONE_EXCLUSIONS[game]):
+            return False
+        has_vct = re.search(
+            r"\b(?:vct|valorant champions tour)\b", current_names
+        )
         standalone_global = re.search(
-            r"\bvalorant (?:masters|champions)(?! tour)\b", text
+            r"\bvalorant (?:masters|champions)(?! tour)\b", current_names
         )
-        regional_season = re.search(
-            r"\b(?:americas|emea|pacific|china|cn)\b", text
-        ) and re.search(
-            r"\b(?:kickoff|stage [12]|regular season|playoffs?)\b", text
-        )
-        return bool(has_vct or standalone_global or regional_season)
+        return bool(has_vct or standalone_global)
 
     def _is_tier_one_lol_league(self, league: Dict[str, Any]) -> bool:
         text = self._competition_filter_text(
