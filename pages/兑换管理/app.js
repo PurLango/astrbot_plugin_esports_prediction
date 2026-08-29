@@ -667,7 +667,7 @@
 
     const bets = (data.bets || []).slice(0, 100);
     $("#esportsBetRows").innerHTML = bets.length ? bets.map((bet) => `<tr>
-      <td><strong>${escapeHtml(bet.match_display_id)}</strong></td><td>${escapeHtml(bet.user_id)}</td><td>${escapeHtml(bet.team_name)}</td><td>${formatNumber(bet.amount)}</td><td>${Number(bet.odds || 1).toFixed(2)}</td><td><span class="esports-status ${bet.status === "won" ? "open" : ["lost", "refunded", "withdrawn"].includes(bet.status) ? "done" : ""}">${escapeHtml(esportsBetStatusName(bet.status))}</span><small>返还 ${formatNumber(bet.payout)}</small></td>
+      <td><strong>${escapeHtml(bet.match_display_id)}</strong></td><td>${escapeHtml(bet.user_display_name || "未知用户")}</td><td>${escapeHtml(bet.team_name)}</td><td>${formatNumber(bet.amount)}</td><td>${Number(bet.odds || 1).toFixed(2)}</td><td><span class="esports-status ${bet.status === "won" ? "open" : ["lost", "refunded", "withdrawn"].includes(bet.status) ? "done" : ""}">${escapeHtml(esportsBetStatusName(bet.status))}</span><small>返还 ${formatNumber(bet.payout)}</small></td>
     </tr>`).join("") : '<tr><td class="esports-empty" colspan="6">暂无下注记录</td></tr>';
   }
 

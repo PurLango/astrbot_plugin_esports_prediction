@@ -87,6 +87,47 @@ class EsportsPageApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(match["visible"])
         self.assertEqual(match["visibility_override"], "hidden")
 
+    async def test_recent_bets_show_source_group_nickname(self):
+        match = self.plugin._create_manual_match_locked(
+            "lol", "LPL", "BLG", "TES", "2026-08-26 20:00"
+        )
+        user_id = "B5138C3BBF9FC0FCEEB211F54B91FF9C"
+        self.plugin.data["groups"] = {
+            "100": {
+                "members": {
+                    user_id: {
+                        "display_name": "其他群昵称",
+                        "updated_at": "2026-08-26T08:00:00",
+                    }
+                }
+            },
+            "200": {
+                "members": {
+                    user_id: {
+                        "display_name": "竞猜群昵称",
+                        "updated_at": "2026-08-26T09:00:00",
+                    }
+                }
+            },
+        }
+        bet = {
+            "match_id": match["id"],
+            "user_id": user_id,
+            "source_group_id": "200",
+            "team_name": "BLG",
+            "amount": 100,
+            "odds": 1.8,
+            "status": "pending",
+            "payout": 0,
+            "updated_at": "2026-08-26T09:10:00",
+        }
+        self.plugin._get_esports_store()["bets"]["test-bet"] = bet
+
+        data = await self.api.overview()
+
+        self.assertEqual(data["bets"][0]["user_display_name"], "竞猜群昵称")
+        self.assertEqual(data["bets"][0]["user_id"], user_id)
+
 
 if __name__ == "__main__":
     unittest.main()

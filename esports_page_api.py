@@ -154,10 +154,14 @@ class EsportsPredictionPageApi:
             if not isinstance(bet, dict):
                 continue
             match = matches.get(bet.get("match_id"), {})
+            user_id = str(bet.get("user_id", "") or "")
             bet_views.append(
                 {
                     "match_display_id": match.get("display_id", "?"),
-                    "user_id": bet.get("user_id", ""),
+                    "user_id": user_id,
+                    "user_display_name": self.plugin._esports_user_name(
+                        user_id, str(bet.get("source_group_id", "") or "")
+                    ),
                     "team_name": bet.get("team_name", ""),
                     "amount": bet.get("amount", 0),
                     "odds": bet.get("odds", 1.0),

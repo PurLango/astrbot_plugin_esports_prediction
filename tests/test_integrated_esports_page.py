@@ -31,6 +31,8 @@ class IntegratedEsportsPageTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("match.betting_open", script)
+        self.assertIn("bet.user_display_name", script)
+        self.assertNotIn("<td>${escapeHtml(bet.user_id)}</td>", script)
         self.assertNotIn("candidates/action", script)
 
     def test_legacy_standalone_esports_page_is_removed(self):

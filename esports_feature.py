@@ -1767,10 +1767,16 @@ class EsportsPredictionMixin:
             )
         yield self._plain_result(event, "【最近比赛结果】\n\n" + "\n\n".join(blocks))
 
-    def _esports_user_name(self, user_id: str) -> str:
+    def _esports_user_name(self, user_id: str, group_id: str = "") -> str:
         groups = self.data.get("groups", {})
         if isinstance(groups, dict):
-            for group in groups.values():
+            preferred = groups.get(str(group_id)) if group_id else None
+            candidates = ([preferred] if isinstance(preferred, dict) else []) + [
+                group
+                for group in groups.values()
+                if isinstance(group, dict) and group is not preferred
+            ]
+            for group in candidates:
                 if not isinstance(group, dict):
                     continue
                 member = group.get("members", {}).get(user_id) if isinstance(group.get("members"), dict) else None
