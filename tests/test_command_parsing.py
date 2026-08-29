@@ -8,9 +8,12 @@ from main import PointSystemPlugin
 
 
 class FakeEvent:
-    def __init__(self, message_str, message=None, self_id=""):
+    def __init__(self, message_str, message=None, self_id="", raw_message=None):
         self.message_str = message_str
-        self.message_obj = SimpleNamespace(message=message or [])
+        self.message_obj = SimpleNamespace(
+            message=message or [],
+            raw_message=raw_message,
+        )
         self._self_id = self_id
 
     def get_self_id(self):
@@ -48,6 +51,37 @@ class CommandParsingTests(unittest.TestCase):
         self.assertEqual(
             self.plugin._parse_manual_points_args(event),
             ("123456789", 200),
+        )
+
+    def test_manual_points_prefers_qq_official_member_openid(self):
+        bot_mention = At()
+        bot_mention.qq = "BOT_OPENID"
+        raw_message = SimpleNamespace(
+            mentions=[
+                SimpleNamespace(
+                    id="BOT_OPENID",
+                    member_openid="",
+                    user_openid="",
+                    is_you=True,
+                ),
+                SimpleNamespace(
+                    id="46070199",
+                    member_openid="TARGET_MEMBER_OPENID",
+                    user_openid="",
+                    is_you=False,
+                ),
+            ]
+        )
+        event = FakeEvent(
+            "/给积分 <@46070199> 200",
+            message=[bot_mention],
+            self_id="BOT_OPENID",
+            raw_message=raw_message,
+        )
+
+        self.assertEqual(
+            self.plugin._parse_manual_points_args(event),
+            ("TARGET_MEMBER_OPENID", 200),
         )
 
     def test_multiple_message_ids_are_removed_only_from_the_end(self):

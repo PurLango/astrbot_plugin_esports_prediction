@@ -121,7 +121,7 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "赛事积分竞猜是一个面向 AstrBot 群聊的电竞赛事竞猜与积分互动插件，支持 LoL、VALORANT 赛程同步、动态倍率、积分下注、自动结算，以及签到、抽奖和兑换等积分功能。",
-    "2.5.5",
+    "2.5.6",
     "https://github.com/PurLango/astrbot_plugin_esports_prediction",
 )
 class PointSystemPlugin(
@@ -2226,6 +2226,27 @@ class PointSystemPlugin(
         self_id = self._normalize_user_id(
             getattr(event, "get_self_id", lambda: "")()
         )
+        raw_message = getattr(getattr(event, "message_obj", None), "raw_message", None)
+        raw_mentions = (
+            raw_message.get("mentions", [])
+            if isinstance(raw_message, dict)
+            else getattr(raw_message, "mentions", [])
+        )
+        for mention in raw_mentions or []:
+            if isinstance(mention, dict):
+                get_value = mention.get
+            else:
+                get_value = lambda key, default=None: getattr(mention, key, default)
+            if get_value("is_you", False) is True:
+                continue
+            for key in ("member_openid", "user_openid", "id"):
+                raw_target = get_value(key, "")
+                if raw_target is None:
+                    continue
+                normalized_target = self._normalize_user_id(raw_target)
+                if normalized_target not in {"", "all", self_id}:
+                    return normalized_target
+
         for component in self._get_message_segments(event):
             if isinstance(component, At):
                 target_uid = getattr(component, "qq", None) or getattr(
