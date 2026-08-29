@@ -290,6 +290,40 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(plugin._is_tier_one_match(match) for match in accepted))
         self.assertFalse(any(plugin._is_tier_one_match(match) for match in rejected))
 
+    async def test_valorant_tournament_tier_survives_normalization_and_marks_vct_level(self):
+        plugin = build_plugin()
+
+        def make_raw(match_id, tier, serie_name="2026 Pacific Stage 2"):
+            return {
+                "id": match_id,
+                "status": "not_started",
+                "begin_at": "2026-08-29T12:00:00Z",
+                "opponents": [
+                    {"id": match_id * 10 + 1, "name": "Paper Rex", "acronym": "PRX"},
+                    {"id": match_id * 10 + 2, "name": "T1", "acronym": "T1"},
+                ],
+                "league": {"id": 7000, "name": "Valorant", "slug": "valorant"},
+                "serie": {"name": serie_name},
+                "tournament": {"name": "Playoffs", "tier": tier},
+            }
+
+        for tier in ("a", "s"):
+            match = plugin._normalize_pandascore_match(
+                "valorant", make_raw(7100 + ord(tier), tier)
+            )
+            self.assertTrue(plugin._is_tier_one_match(match))
+            persisted = plugin._normalize_esports_match_record(match, match["id"])
+            self.assertTrue(plugin._is_tier_one_match(persisted))
+
+        lower_tier = plugin._normalize_pandascore_match(
+            "valorant", make_raw(7200, "b")
+        )
+        excluded = plugin._normalize_pandascore_match(
+            "valorant", make_raw(7201, "a", "2026 Challengers Pacific")
+        )
+        self.assertFalse(plugin._is_tier_one_match(lower_tier))
+        self.assertFalse(plugin._is_tier_one_match(excluded))
+
     async def test_tier_one_league_discovery_excludes_lower_tiers(self):
         plugin = build_plugin()
         accepted = [

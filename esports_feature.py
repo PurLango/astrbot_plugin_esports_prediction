@@ -38,6 +38,7 @@ TIER_ONE_EXCLUSIONS = {
         "showmatch",
     ),
 }
+VALORANT_TOP_TOURNAMENT_TIERS = {"a", "s"}
 FINISHED_BET_STATUSES = {"won", "lost", "refunded"}
 OPEN_MATCH_STATUSES = {"not_started", "running"}
 REFUND_MATCH_STATUSES = {"canceled", "cancelled", "postponed", "abandoned"}
@@ -212,6 +213,7 @@ class EsportsPredictionMixin:
             "source": str(raw_match.get("source", "manual") or "manual").strip()[:40],
             "source_id": str(raw_match.get("source_id", "") or "").strip()[:80],
             "league_id": str(raw_match.get("league_id", "") or "").strip()[:40],
+            "tournament_tier": str(raw_match.get("tournament_tier", "") or "").strip().lower()[:20],
             "game": str(raw_match.get("game", "") or "").strip().lower()[:20],
             "competition": str(raw_match.get("competition", "") or "").strip()[:120],
             "stage": str(raw_match.get("stage", "") or "").strip()[:120],
@@ -504,6 +506,7 @@ class EsportsPredictionMixin:
             "source": "pandascore",
             "source_id": source_id,
             "league_id": str(league.get("id", "") or "").strip(),
+            "tournament_tier": str(tournament.get("tier", "") or "").strip().lower(),
             "game": game,
             "competition": competition or "未命名赛事",
             "stage": str(raw.get("name", "") or "").strip()[:120],
@@ -543,11 +546,13 @@ class EsportsPredictionMixin:
             return True
         game = str(match.get("game", "")).lower()
         text = self._competition_filter_text(match)
-        if not text or game not in TIER_ONE_EXCLUSIONS:
+        if game not in TIER_ONE_EXCLUSIONS:
             return False
-        if any(token in text for token in TIER_ONE_EXCLUSIONS[game]):
+        if text and any(token in text for token in TIER_ONE_EXCLUSIONS[game]):
             return False
         if game == "lol":
+            if not text:
+                return False
             return bool(
                 re.search(
                     r"\b(?:lpl|lck|league of legends pro league|"
@@ -556,6 +561,11 @@ class EsportsPredictionMixin:
                     text,
                 )
             )
+        tournament_tier = str(match.get("tournament_tier", "") or "").strip().lower()
+        if tournament_tier in VALORANT_TOP_TOURNAMENT_TIERS:
+            return True
+        if not text:
+            return False
         has_vct = re.search(r"\b(?:vct|valorant champions tour)\b", text)
         standalone_global = re.search(
             r"\bvalorant (?:masters|champions)(?! tour)\b", text
