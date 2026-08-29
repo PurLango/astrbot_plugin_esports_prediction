@@ -2,13 +2,19 @@
 import unittest
 from types import SimpleNamespace
 
+from astrbot.api.message_components import At
+
 from main import PointSystemPlugin
 
 
 class FakeEvent:
-    def __init__(self, message_str):
+    def __init__(self, message_str, message=None, self_id=""):
         self.message_str = message_str
-        self.message_obj = SimpleNamespace(message=[])
+        self.message_obj = SimpleNamespace(message=message or [])
+        self._self_id = self_id
+
+    def get_self_id(self):
+        return self._self_id
 
 
 class CommandParsingTests(unittest.TestCase):
@@ -26,6 +32,22 @@ class CommandParsingTests(unittest.TestCase):
         self.assertEqual(
             self.plugin._parse_manual_points_args(event),
             ("123456", 100),
+        )
+
+    def test_manual_points_skips_bot_mention_before_target_user(self):
+        bot_mention = At()
+        bot_mention.qq = "46070199"
+        target_mention = At()
+        target_mention.qq = "123456789"
+        event = FakeEvent(
+            "/给积分 @BinLG 200",
+            message=[bot_mention, target_mention],
+            self_id="46070199",
+        )
+
+        self.assertEqual(
+            self.plugin._parse_manual_points_args(event),
+            ("123456789", 200),
         )
 
     def test_multiple_message_ids_are_removed_only_from_the_end(self):

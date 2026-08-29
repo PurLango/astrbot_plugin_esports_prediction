@@ -121,7 +121,7 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "赛事积分竞猜是一个面向 AstrBot 群聊的电竞赛事竞猜与积分互动插件，支持 LoL、VALORANT 赛程同步、动态倍率、积分下注、自动结算，以及签到、抽奖和兑换等积分功能。",
-    "2.5.4",
+    "2.5.5",
     "https://github.com/PurLango/astrbot_plugin_esports_prediction",
 )
 class PointSystemPlugin(
@@ -2223,13 +2223,19 @@ class PointSystemPlugin(
         return True
 
     def _extract_target_user_id(self, event: AstrMessageEvent) -> str | None:
+        self_id = self._normalize_user_id(
+            getattr(event, "get_self_id", lambda: "")()
+        )
         for component in self._get_message_segments(event):
             if isinstance(component, At):
                 target_uid = getattr(component, "qq", None) or getattr(
                     component, "user_id", None
                 )
                 if target_uid:
-                    return self._normalize_user_id(target_uid)
+                    normalized_target = self._normalize_user_id(target_uid)
+                    if normalized_target in {"", "all", self_id}:
+                        continue
+                    return normalized_target
         return None
 
     def _extract_reply_message_id(self, event: AstrMessageEvent) -> int | None:
