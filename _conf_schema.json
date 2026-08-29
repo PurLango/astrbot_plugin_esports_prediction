@@ -603,8 +603,8 @@
       "games": {
         "description": "同步的游戏",
         "type": "list",
-        "hint": "可填写 lol 和 valorant。",
-        "default": ["lol", "valorant"]
+        "hint": "可填写 lol、valorant、cs2 和 kog。",
+        "default": ["lol", "valorant", "cs2", "kog"]
       },
       "sync_interval_minutes": {
         "description": "自动同步间隔（分钟）",

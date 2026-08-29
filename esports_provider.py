@@ -10,6 +10,12 @@ from typing import Any
 
 
 PANDASCORE_BASE_URL = "https://api.pandascore.co"
+PANDASCORE_GAME_PATHS = {
+    "lol": "lol",
+    "valorant": "valorant",
+    "cs2": "csgo",
+    "kog": "kog",
+}
 LEAGUE_SEARCH_TERMS = {
     "lol": (
         "LPL",
@@ -83,7 +89,7 @@ class PandaScoreProvider:
         league_ids: list[str] | tuple[str, ...] | None = None,
     ) -> list[dict[str, Any]]:
         normalized_game = str(game or "").strip().lower()
-        if normalized_game not in {"lol", "valorant"}:
+        if normalized_game not in PANDASCORE_GAME_PATHS:
             raise EsportsProviderError(f"不支持的数据源游戏类型：{game}")
         normalized_state = str(state or "").strip().lower()
         if normalized_state not in {"upcoming", "running", "past"}:
@@ -106,9 +112,11 @@ class PandaScoreProvider:
             }
             if normalized_league_ids:
                 params["filter[league_id]"] = ",".join(normalized_league_ids)
+            if normalized_game == "cs2":
+                params["filter[videogame_title]"] = "cs-2"
             page = await asyncio.to_thread(
                 self._get_json_sync,
-                f"/{normalized_game}/matches/{normalized_state}",
+                f"/{PANDASCORE_GAME_PATHS[normalized_game]}/matches/{normalized_state}",
                 params,
             )
             result.extend(page)

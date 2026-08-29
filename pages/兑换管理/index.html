@@ -130,7 +130,7 @@
 
       <section id="esportsPage" class="workspace-page" data-page-panel="esports" hidden>
         <div class="page-heading esports-heading">
-          <div><span class="section-kicker">竞猜运营</span><h2>赛程、倍率与结算</h2><p>管理 LoL 与无畏契约比赛，同步赛果并查看全局下注。</p></div>
+          <div><span class="section-kicker">竞猜运营</span><h2>赛程、倍率与结算</h2><p>管理比赛、同步赛果并查看全局下注。</p></div>
           <div class="esports-heading-actions"><span id="esportsUpdatedAt" class="updated-at">等待同步</span><button id="esportsSyncButton" class="primary-button" type="button"><i data-lucide="refresh-cw"></i><span>立即同步</span></button></div>
         </div>
 
@@ -153,13 +153,15 @@
               <label><input id="esportsSyncEnabled" type="checkbox" /><span>自动同步与结算</span></label>
               <label><input id="esportsGameLol" type="checkbox" /><span>英雄联盟</span></label>
               <label><input id="esportsGameValorant" type="checkbox" /><span>无畏契约</span></label>
+              <label><input id="esportsGameCs2" type="checkbox" /><span>CS2</span></label>
+              <label><input id="esportsGameKog" type="checkbox" /><span>王者荣耀</span></label>
             </div>
           </section>
 
           <section class="esports-card" aria-labelledby="manualMatchTitle">
             <div class="esports-card-heading"><div><span class="section-kicker">手动兜底</span><h3 id="manualMatchTitle">添加一场比赛</h3><p>数据源暂未收录时，可按本地时区手动创建。</p></div><button id="esportsAddMatchButton" class="compact-button" type="button"><i data-lucide="plus"></i><span>添加比赛</span></button></div>
             <div class="esports-form-grid manual-grid">
-              <label class="esports-field"><span>游戏</span><select id="esportsNewGame"><option value="lol">英雄联盟</option><option value="valorant">无畏契约</option></select></label>
+              <label class="esports-field"><span>游戏</span><select id="esportsNewGame"><option value="lol">英雄联盟</option><option value="valorant">无畏契约</option><option value="cs2">CS2</option><option value="kog">王者荣耀</option></select></label>
               <label class="esports-field"><span>赛事</span><input id="esportsNewCompetition" placeholder="例如 LPL 2026" /></label>
               <label class="esports-field"><span>队伍 A</span><input id="esportsNewTeamA" /></label>
               <label class="esports-field"><span>队伍 B</span><input id="esportsNewTeamB" /></label>
@@ -169,7 +171,7 @@
         </div>
 
         <section class="esports-card esports-table-card" aria-labelledby="matchManagementTitle">
-          <div class="esports-card-heading"><div><span class="section-kicker">比赛管理</span><h3 id="matchManagementTitle">比赛与结算</h3></div><div class="esports-match-tools"><div class="esports-game-filter" role="group" aria-label="按游戏筛选比赛"><button class="active" type="button" data-esports-game-filter="" aria-pressed="true">全部</button><button type="button" data-esports-game-filter="lol" aria-pressed="false">英雄联盟</button><button type="button" data-esports-game-filter="valorant" aria-pressed="false">无畏契约</button></div><label class="search-box esports-search"><i data-lucide="search"></i><input id="esportsMatchSearch" type="search" placeholder="搜索编号、赛事或队伍" autocomplete="off" /></label></div></div>
+          <div class="esports-card-heading"><div><span class="section-kicker">比赛管理</span><h3 id="matchManagementTitle">比赛与结算</h3></div><div class="esports-match-tools"><div class="esports-game-filter" role="group" aria-label="按游戏筛选比赛"><button class="active" type="button" data-esports-game-filter="" aria-pressed="true">全部</button><button type="button" data-esports-game-filter="lol" aria-pressed="false">英雄联盟</button><button type="button" data-esports-game-filter="valorant" aria-pressed="false">无畏契约</button><button type="button" data-esports-game-filter="cs2" aria-pressed="false">CS2</button><button type="button" data-esports-game-filter="kog" aria-pressed="false">王者荣耀</button></div><label class="search-box esports-search"><i data-lucide="search"></i><input id="esportsMatchSearch" type="search" placeholder="搜索编号、赛事或队伍" autocomplete="off" /></label></div></div>
           <div class="esports-table-wrap"><table class="esports-table matches-table"><thead><tr><th>比赛</th><th>开赛时间</th><th>模型倍率 / 投注</th><th>状态</th><th>操作</th></tr></thead><tbody id="esportsMatchRows"></tbody></table></div>
         </section>
 

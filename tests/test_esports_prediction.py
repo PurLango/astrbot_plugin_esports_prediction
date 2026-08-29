@@ -73,7 +73,7 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         reply = await anext(plugin.esports_bet(FakeEvent("/竞猜")))
 
         self.assertIn("赛事竞猜使用方法", reply)
-        self.assertIn("/今日赛事 [撸/瓦]", reply)
+        self.assertIn("/今日赛事 [撸/瓦/CS2/王者]", reply)
         self.assertIn("/竞猜 L001 TES 100", reply)
         self.assertIn("/改选 L001 BLG", reply)
         self.assertIn("/撤销竞猜 L001", reply)
@@ -164,7 +164,29 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
             plugin.esports_matches(FakeEvent("/今日赛事 dota"))
         )
 
-        self.assertIn("用法：/今日赛事 [撸/瓦]", reply)
+        self.assertIn("用法：/今日赛事 [撸/瓦/CS2/王者]", reply)
+
+    async def test_today_matches_can_filter_cs2_and_kog(self):
+        plugin = build_plugin()
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 28, 0, 0, tzinfo=datetime.timezone.utc
+        )
+        cs2_match = plugin._create_manual_match_locked(
+            "cs2", "BLAST Open", "Vitality", "Spirit", "2026-08-29 19:00"
+        )
+        kog_match = plugin._create_manual_match_locked(
+            "kog", "KPL", "AG Super Play", "Wolves", "2026-08-29 20:00"
+        )
+
+        cs2_reply = await anext(plugin.esports_matches(FakeEvent("/今日赛事 cs2")))
+        kog_reply = await anext(plugin.esports_matches(FakeEvent("/今日赛事 王者")))
+
+        self.assertIn(cs2_match["display_id"], cs2_reply)
+        self.assertNotIn(kog_match["display_id"], cs2_reply)
+        self.assertIn("CS2", cs2_reply)
+        self.assertIn(kog_match["display_id"], kog_reply)
+        self.assertNotIn(cs2_match["display_id"], kog_reply)
+        self.assertIn("王者荣耀", kog_reply)
 
     async def test_match_detail_is_not_registered_as_a_chat_command(self):
         self.assertNotIn("赛事详情", REGISTERED_COMMAND_NAMES)
@@ -233,6 +255,14 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(next_lol["display_id"], "L003")
         self.assertEqual(first_valorant["display_id"], "V001")
+        first_cs2 = plugin._create_manual_match_locked(
+            "cs2", "BLAST", "Vitality", "Spirit", "2026-09-05 19:00"
+        )
+        first_kog = plugin._create_manual_match_locked(
+            "kog", "KPL", "AG", "WB", "2026-09-06 19:00"
+        )
+        self.assertEqual(first_cs2["display_id"], "C001")
+        self.assertEqual(first_kog["display_id"], "K001")
 
     async def test_today_matches_are_supplemented_with_nearby_open_matches(self):
         plugin = build_plugin()
@@ -290,6 +320,61 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
             {"game": "valorant", "_filter_text": "valorant 2026 americas regular season"},
             {"game": "valorant", "_filter_text": "valorant 2026 china stage 1"},
             {"game": "valorant", "_filter_text": "valorant pacific invitational"},
+        ]
+
+        self.assertTrue(all(plugin._is_tier_one_match(match) for match in accepted))
+        self.assertFalse(any(plugin._is_tier_one_match(match) for match in rejected))
+
+    async def test_cs2_and_kog_tier_one_rules_use_tier_and_current_names(self):
+        plugin = build_plugin()
+        accepted = [
+            {
+                "game": "cs2",
+                "competition": "BLAST Open · Porto Fall 2026 · Group A",
+                "tournament_tier": "a",
+            },
+            {
+                "game": "cs2",
+                "competition": "Intel Extreme Masters · Cologne · Playoffs",
+                "tournament_tier": "s",
+            },
+            {
+                "game": "kog",
+                "competition": "King Pro League · Summer 2026 · Playoffs",
+                "tournament_tier": "s",
+            },
+            {
+                "game": "kog",
+                "competition": "Honor of Kings · World Champion Cup · Finals",
+                "tournament_tier": "s",
+            },
+        ]
+        rejected = [
+            {
+                "game": "cs2",
+                "competition": "CCT Europe · Group Stage",
+                "tournament_tier": "b",
+            },
+            {
+                "game": "cs2",
+                "competition": "BLAST Open Qualifier",
+                "tournament_tier": "a",
+            },
+            {
+                "game": "kog",
+                "competition": "KPL Growth League · Summer",
+                "tournament_tier": "s",
+            },
+            {
+                "game": "kog",
+                "competition": "Arena of Glory · Winter",
+                "tournament_tier": "s",
+            },
+            {
+                "game": "kog",
+                "competition": "King Pro League · Summer",
+                "tournament_tier": "a",
+            },
         ]
 
         self.assertTrue(all(plugin._is_tier_one_match(match) for match in accepted))
@@ -575,6 +660,36 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["path"], "/valorant/matches/upcoming")
         self.assertNotIn("filter[league_id]", captured["params"])
 
+    async def test_provider_uses_csgo_endpoint_for_cs2_title(self):
+        provider = PandaScoreProvider("test-token")
+        captured = {}
+
+        def fake_get(path, params):
+            captured["path"] = path
+            captured["params"] = params
+            return []
+
+        provider._get_json_sync = fake_get
+        await provider.fetch_matches("cs2", "upcoming")
+
+        self.assertEqual(captured["path"], "/csgo/matches/upcoming")
+        self.assertEqual(captured["params"]["filter[videogame_title]"], "cs-2")
+
+    async def test_provider_uses_kog_endpoint_for_honor_of_kings(self):
+        provider = PandaScoreProvider("test-token")
+        captured = {}
+
+        def fake_get(path, params):
+            captured["path"] = path
+            captured["params"] = params
+            return []
+
+        provider._get_json_sync = fake_get
+        await provider.fetch_matches("kog", "upcoming")
+
+        self.assertEqual(captured["path"], "/kog/matches/upcoming")
+        self.assertNotIn("filter[videogame_title]", captured["params"])
+
     async def test_provider_discovers_leagues_concurrently(self):
         provider = PandaScoreProvider("test-token")
         lock = threading.Lock()
@@ -740,6 +855,83 @@ class TargetedHistoryProvider:
 
 
 class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cs2_and_kog_share_history_based_odds_pipeline(self):
+        class NewGamesProvider:
+            calls = []
+
+            def __init__(self, token, **kwargs):
+                pass
+
+            async def fetch_matches(self, game, state, **kwargs):
+                league_ids = tuple(str(item) for item in kwargs.get("league_ids", []))
+                self.calls.append((game, state, kwargs.get("pages"), league_ids))
+                definitions = {
+                    "cs2": (9100, 911, 912, "BLAST Open", "a"),
+                    "kog": (9200, 921, 922, "King Pro League", "s"),
+                }
+                league_id, first_id, second_id, league_name, tier = definitions[game]
+                if state == "upcoming":
+                    return [
+                        {
+                            "id": league_id + 1,
+                            "status": "not_started",
+                            "begin_at": "2026-08-29T12:00:00Z",
+                            "opponents": [
+                                {"id": first_id, "name": "Strong", "acronym": "STR"},
+                                {"id": second_id, "name": "Weak", "acronym": "WEK"},
+                            ],
+                            "league": {"id": league_id, "name": league_name},
+                            "serie": {"name": "2026"},
+                            "tournament": {"name": "Playoffs", "tier": tier},
+                        }
+                    ]
+                if state == "past" and league_ids == (str(league_id),):
+                    return [
+                        {
+                            "id": league_id + 100 + index,
+                            "status": "finished",
+                            "begin_at": f"2026-08-{10 + index:02d}T12:00:00Z",
+                            "end_at": f"2026-08-{10 + index:02d}T13:00:00Z",
+                            "winner_id": first_id,
+                            "opponents": [
+                                {"id": first_id, "name": "Strong", "acronym": "STR"},
+                                {"id": second_id, "name": "Weak", "acronym": "WEK"},
+                            ],
+                            "league": {"id": league_id, "name": league_name},
+                            "serie": {"name": "2026"},
+                            "tournament": {"name": "Playoffs", "tier": tier},
+                        }
+                        for index in range(8)
+                    ]
+                return []
+
+        plugin = build_plugin()
+        plugin.config["esports_prediction_settings"]["games"] = ["cs2", "kog"]
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 28, 0, 0, tzinfo=datetime.timezone.utc
+        )
+        original = esports_feature.PandaScoreProvider
+        esports_feature.PandaScoreProvider = NewGamesProvider
+        NewGamesProvider.calls = []
+        try:
+            result = await plugin._sync_esports_once("新增游戏测试")
+        finally:
+            esports_feature.PandaScoreProvider = original
+
+        store = plugin._get_esports_store()["matches"]
+        self.assertIn("pandascore:cs2:9101", store)
+        self.assertIn("pandascore:kog:9201", store)
+        for match_id in ("pandascore:cs2:9101", "pandascore:kog:9201"):
+            match = store[match_id]
+            first_id = match["teams"][0]["id"]
+            second_id = match["teams"][1]["id"]
+            self.assertGreater(match["probabilities"][first_id], 0.5)
+            self.assertNotEqual(match["odds"][first_id], match["odds"][second_id])
+        self.assertIn(("cs2", "upcoming", 5, ()), NewGamesProvider.calls)
+        self.assertIn(("kog", "upcoming", 5, ()), NewGamesProvider.calls)
+        self.assertIn("CS2 原始", result["summary"])
+        self.assertIn("王者荣耀 原始", result["summary"])
+
     async def test_odds_history_uses_league_ids_discovered_from_current_matches(self):
         class CurrentLeagueHistoryProvider:
             calls = []

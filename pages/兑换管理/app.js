@@ -640,6 +640,10 @@
     return ({ pending: "待结算", won: "命中", lost: "未命中", refunded: "已退款", withdrawn: "已撤单" })[value] || value || "未知";
   }
 
+  function esportsGameName(value) {
+    return ({ lol: "英雄联盟", valorant: "无畏契约", cs2: "CS2", kog: "王者荣耀" })[value] || "电竞";
+  }
+
   function renderEsportsTables() {
     const data = state.esportsData;
     if (!data) return;
@@ -653,7 +657,7 @@
       const terminal = ["settled", "refunded", "canceled", "postponed"].includes(match.status);
       const statusClass = terminal ? "done" : match.status === "running" ? "live" : "open";
       return `<tr>
-        <td class="esports-match-main"><strong>${escapeHtml(match.display_id)}</strong><small>${escapeHtml(match.game === "lol" ? "英雄联盟" : "无畏契约")} · ${escapeHtml(match.competition)}</small><span>${escapeHtml(match.name)}</span></td>
+        <td class="esports-match-main"><strong>${escapeHtml(match.display_id)}</strong><small>${escapeHtml(esportsGameName(match.game))} · ${escapeHtml(match.competition)}</small><span>${escapeHtml(match.name)}</span></td>
         <td><span class="esports-time">${escapeHtml(match.start_time_text)}</span></td>
         <td><div class="esports-team-line"><b>${escapeHtml(teamA.code || teamA.name)}</b><span>${Number(teamA.probability || 0).toLocaleString("zh-CN", { style: "percent", maximumFractionDigits: 1 })} · ${Number(teamA.odds || 1).toFixed(2)} · ${formatNumber(teamA.pool)}</span></div><div class="esports-team-line"><b>${escapeHtml(teamB.code || teamB.name)}</b><span>${Number(teamB.probability || 0).toLocaleString("zh-CN", { style: "percent", maximumFractionDigits: 1 })} · ${Number(teamB.odds || 1).toFixed(2)} · ${formatNumber(teamB.pool)}</span></div></td>
         <td><div class="esports-status-stack"><span class="esports-status ${statusClass}">${escapeHtml(esportsStatusName(match.status))}</span>${match.betting_open ? '<span class="esports-status betting">竞猜中</span>' : ""}</div><small>${match.visible ? "群内可见" : "已隐藏"}${match.odds_locked ? " · 倍率已锁" : ""}</small></td>
@@ -682,6 +686,8 @@
     $("#esportsSyncInterval").value = settings.sync_interval_minutes ?? 10;
     $("#esportsGameLol").checked = games.includes("lol");
     $("#esportsGameValorant").checked = games.includes("valorant");
+    $("#esportsGameCs2").checked = games.includes("cs2");
+    $("#esportsGameKog").checked = games.includes("kog");
     $("#esportsToken").value = "";
     $("#esportsToken").placeholder = settings.token_configured ? "已配置；留空保持不变" : "粘贴 PandaScore Token";
     renderEsportsTables();
@@ -746,7 +752,12 @@
       sync_enabled: $("#esportsSyncEnabled").checked,
       sync_interval_minutes: Number($("#esportsSyncInterval").value),
       pandascore_token: $("#esportsToken").value.trim(),
-      games: [$("#esportsGameLol").checked ? "lol" : "", $("#esportsGameValorant").checked ? "valorant" : ""].filter(Boolean),
+      games: [
+        $("#esportsGameLol").checked ? "lol" : "",
+        $("#esportsGameValorant").checked ? "valorant" : "",
+        $("#esportsGameCs2").checked ? "cs2" : "",
+        $("#esportsGameKog").checked ? "kog" : "",
+      ].filter(Boolean),
     }, "竞猜设置已保存");
     button.disabled = false;
     if (saved) $("#esportsToken").value = "";

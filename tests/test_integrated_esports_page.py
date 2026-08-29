@@ -22,6 +22,10 @@ class IntegratedEsportsPageTests(unittest.TestCase):
         self.assertIn('id="esportsBetRows"', html)
         self.assertIn('data-esports-game-filter="lol"', html)
         self.assertIn('data-esports-game-filter="valorant"', html)
+        self.assertIn('data-esports-game-filter="cs2"', html)
+        self.assertIn('data-esports-game-filter="kog"', html)
+        self.assertIn('id="esportsGameCs2"', html)
+        self.assertIn('id="esportsGameKog"', html)
         self.assertNotIn("候选比赛", html)
         script = (ROOT / "pages" / "兑换管理" / "app.js").read_text(
             encoding="utf-8"

@@ -37,6 +37,43 @@ TIER_ONE_EXCLUSIONS = {
         "qualifier",
         "showmatch",
     ),
+    "cs2": (
+        "academy",
+        "challenger",
+        "qualifier",
+        "show match",
+        "showmatch",
+        "youth",
+    ),
+    "kog": (
+        "academy",
+        "development",
+        "growth league",
+        "qualifier",
+        "secondary",
+        "show match",
+        "showmatch",
+        "youth",
+    ),
+}
+SUPPORTED_ESPORTS_GAMES = ("lol", "valorant", "cs2", "kog")
+ESPORTS_GAME_LABELS = {
+    "lol": "LoL",
+    "valorant": "VALORANT",
+    "cs2": "CS2",
+    "kog": "王者荣耀",
+}
+ESPORTS_GAME_NAMES = {
+    "lol": "英雄联盟",
+    "valorant": "无畏契约",
+    "cs2": "CS2",
+    "kog": "王者荣耀",
+}
+ESPORTS_DISPLAY_PREFIXES = {
+    "lol": "L",
+    "valorant": "V",
+    "cs2": "C",
+    "kog": "K",
 }
 FINISHED_BET_STATUSES = {"won", "lost", "refunded"}
 OPEN_MATCH_STATUSES = {"not_started", "running"}
@@ -55,7 +92,10 @@ class EsportsPredictionMixin:
             "bets": {},
             "ratings": {},
             "rating_processed_match_ids": [],
-            "display_sequences": {"lol": 0, "valorant": 0, "other": 0},
+            "display_sequences": {
+                **{game: 0 for game in SUPPORTED_ESPORTS_GAMES},
+                "other": 0,
+            },
             "tier_one_league_ids": {"lol": []},
             "tier_one_leagues_refreshed_at": {"lol": ""},
             "sync": {
@@ -218,6 +258,9 @@ class EsportsPredictionMixin:
             "source_id": str(raw_match.get("source_id", "") or "").strip()[:80],
             "league_id": str(raw_match.get("league_id", "") or "").strip()[:40],
             "game": str(raw_match.get("game", "") or "").strip().lower()[:20],
+            "tournament_tier": str(
+                raw_match.get("tournament_tier", "") or ""
+            ).strip().lower()[:4],
             "competition": str(raw_match.get("competition", "") or "").strip()[:120],
             "stage": str(raw_match.get("stage", "") or "").strip()[:120],
             "name": str(raw_match.get("name", "") or "").strip()[:180],
@@ -267,13 +310,13 @@ class EsportsPredictionMixin:
         raw = self.config.get("esports_prediction_settings", {})
         if not isinstance(raw, dict):
             raw = {}
-        games = raw.get("games", ["lol", "valorant"])
+        games = raw.get("games", list(SUPPORTED_ESPORTS_GAMES))
         if isinstance(games, str):
             games = re.split(r"[,，\s]+", games)
         normalized_games = [
             str(item).strip().lower()
             for item in (games if isinstance(games, list) else [])
-            if str(item).strip().lower() in {"lol", "valorant"}
+            if str(item).strip().lower() in SUPPORTED_ESPORTS_GAMES
         ]
         min_bet = self._normalize_int(raw.get("min_bet"), 10, 1)
         max_bet = max(self._normalize_int(raw.get("max_bet"), 10000, 1), min_bet)
@@ -289,7 +332,7 @@ class EsportsPredictionMixin:
             "sync_enabled": bool(raw.get("sync_enabled", True)),
             "provider": str(raw.get("provider", "pandascore") or "pandascore").strip().lower(),
             "pandascore_token": str(raw.get("pandascore_token", "") or "").strip(),
-            "games": normalized_games or ["lol", "valorant"],
+            "games": normalized_games or list(SUPPORTED_ESPORTS_GAMES),
             "sync_interval_minutes": self._normalize_int(
                 raw.get("sync_interval_minutes"), 10, 2
             ),
@@ -359,11 +402,11 @@ class EsportsPredictionMixin:
     @staticmethod
     def _match_display_scope(match: Dict[str, Any]) -> str:
         game = str(match.get("game", "") or "").strip().lower()
-        return game if game in {"lol", "valorant"} else "other"
+        return game if game in SUPPORTED_ESPORTS_GAMES else "other"
 
     @staticmethod
     def _match_display_prefix(scope: str) -> str:
-        return {"lol": "L", "valorant": "V"}.get(scope, "M")
+        return ESPORTS_DISPLAY_PREFIXES.get(scope, "M")
 
     @staticmethod
     def _sorted_matches_for_display_id(matches: Dict[str, Any]) -> list[Dict[str, Any]]:
@@ -440,7 +483,8 @@ class EsportsPredictionMixin:
     ) -> str:
         esports = self._get_esports_store()
         sequences = esports.setdefault(
-            "display_sequences", {"lol": 0, "valorant": 0, "other": 0}
+            "display_sequences",
+            {**{game: 0 for game in SUPPORTED_ESPORTS_GAMES}, "other": 0},
         )
         return self._allocate_match_display_id(match, matches, sequences)
 
@@ -511,6 +555,9 @@ class EsportsPredictionMixin:
             "source_id": source_id,
             "league_id": str(league.get("id", "") or "").strip(),
             "game": game,
+            "tournament_tier": str(tournament.get("tier", "") or "")
+            .strip()
+            .lower()[:4],
             "competition": competition or "未命名赛事",
             "stage": str(raw.get("name", "") or "").strip()[:120],
             "name": f"{teams[0]['name']} vs {teams[1]['name']}",
@@ -579,6 +626,19 @@ class EsportsPredictionMixin:
             return False
         if any(token in current_names for token in TIER_ONE_EXCLUSIONS[game]):
             return False
+        tournament_tier = str(
+            match.get("tournament_tier", "") or ""
+        ).strip().lower()
+        if game == "cs2":
+            return tournament_tier in {"s", "a"}
+        if game == "kog":
+            return bool(
+                tournament_tier == "s"
+                and re.search(
+                    r"\b(?:king pro league|kpl|honor of kings)\b",
+                    current_names,
+                )
+            )
         has_vct = re.search(
             r"\b(?:vct|valorant champions tour)\b", current_names
         )
@@ -1036,7 +1096,7 @@ class EsportsPredictionMixin:
                             state,
                             pages=(
                                 5
-                                if game == "valorant"
+                                if game in {"valorant", "cs2", "kog"}
                                 and not allowed_ids
                                 and state == "upcoming"
                                 else 2
@@ -1199,7 +1259,7 @@ class EsportsPredictionMixin:
             sync["last_success_at"] = self._utcnow().isoformat(timespec="seconds")
             sync["last_error"] = "；".join(errors)[:500]
             game_summary = "，".join(
-                f"{'LoL' if game == 'lol' else 'VALORANT'} 原始 {raw_counts.get(game, 0)}"
+                f"{ESPORTS_GAME_LABELS.get(game, game.upper())} 原始 {raw_counts.get(game, 0)}"
                 f"/收录 {accepted_counts.get(game, 0)}/可竞猜 {available_counts.get(game, 0)}"
                 for game in settings["games"]
             )
@@ -1278,10 +1338,9 @@ class EsportsPredictionMixin:
         odds = match.get("odds", {})
         first_name = self._team_display_name(teams[0])
         second_name = self._team_display_name(teams[1])
-        game_label = {
-            "lol": "LoL",
-            "valorant": "VALORANT",
-        }.get(str(match.get("game", "")).lower(), "电竞")
+        game_label = ESPORTS_GAME_LABELS.get(
+            str(match.get("game", "")).lower(), "电竞"
+        )
         return "\n".join(
             [
                 f"【{match.get('display_id')}｜{game_label}】",
@@ -1335,6 +1394,14 @@ class EsportsPredictionMixin:
             "无畏契约": "valorant",
             "瓦": "valorant",
             "瓦罗兰特": "valorant",
+            "cs": "cs2",
+            "cs2": "cs2",
+            "反恐精英": "cs2",
+            "反恐": "cs2",
+            "kog": "kog",
+            "kpl": "kog",
+            "王者": "kog",
+            "王者荣耀": "kog",
         }
         return aliases.get(normalized)
 
@@ -1343,7 +1410,7 @@ class EsportsPredictionMixin:
             [
                 "【赛事竞猜使用方法】",
                 "",
-                "查看比赛：/今日赛事 [撸/瓦]",
+                "查看比赛：/今日赛事 [撸/瓦/CS2/王者]",
                 "参与竞猜：/竞猜 L001 TES 100",
                 "追加同队：再次输入相同竞猜指令",
                 "改选队伍：/改选 L001 BLG",
@@ -1376,7 +1443,7 @@ class EsportsPredictionMixin:
         if game_filter is None:
             yield self._plain_result(
                 event,
-                "用法：/今日赛事 [撸/瓦]\n也可以填写 lol、valorant、英雄联盟或无畏契约。",
+                "用法：/今日赛事 [撸/瓦/CS2/王者]\n也可以填写 lol、valorant、cs2、kog 或游戏全名。",
             )
             return
         async with self._data_lock:
@@ -1397,19 +1464,13 @@ class EsportsPredictionMixin:
             selected = self._select_matches_for_display(matches)
             blocks = [self._format_match_line_locked(item) for item in selected]
         if not blocks:
-            game_label = {
-                "lol": "英雄联盟",
-                "valorant": "无畏契约",
-            }.get(game_filter, "")
+            game_label = ESPORTS_GAME_NAMES.get(game_filter, "")
             yield self._plain_result(
                 event,
                 f"当前没有已收录的{game_label}待竞猜赛事。管理员可以先同步或手动添加比赛。",
             )
             return
-        game_label = {
-            "lol": "英雄联盟",
-            "valorant": "无畏契约",
-        }.get(game_filter, "")
+        game_label = ESPORTS_GAME_NAMES.get(game_filter, "")
         title = (
             f"{game_label}今日及近期可竞猜赛事"
             if today_matches
@@ -1690,9 +1751,8 @@ class EsportsPredictionMixin:
                     if winner
                     else "赛果待确认"
                 )
-            game_label = (
-                "LoL" if match.get("game") == "lol" else "VALORANT"
-                if match.get("game") == "valorant" else "电竞"
+            game_label = ESPORTS_GAME_LABELS.get(
+                str(match.get("game", "")).lower(), "电竞"
             )
             blocks.append(
                 "\n".join(
@@ -1786,6 +1846,7 @@ class EsportsPredictionMixin:
             "source": "manual",
             "source_id": "",
             "game": game,
+            "tournament_tier": "",
             "competition": competition.strip()[:120],
             "stage": "",
             "name": f"{teams[0]['name']} vs {teams[1]['name']}",
@@ -1829,7 +1890,7 @@ class EsportsPredictionMixin:
         async with self._data_lock:
             if command in {"添加", "add"}:
                 parts = [item.strip() for item in remainder.split("|")]
-                if len(parts) != 5 or parts[0].lower() not in {"lol", "valorant"} or not all(parts):
+                if len(parts) != 5 or parts[0].lower() not in SUPPORTED_ESPORTS_GAMES or not all(parts):
                     message = "用法：/竞猜管理 添加 lol|赛事名|队伍A|队伍B|2026-09-01 19:00"
                 else:
                     try:
@@ -1885,7 +1946,7 @@ class EsportsPredictionMixin:
                     message = f"已{'显示' if match['visible'] else '隐藏'} {match['display_id']}。"
             else:
                 message = (
-                    "竞猜管理：同步；添加 lol|赛事|队伍A|队伍B|YYYY-MM-DD HH:MM；"
+                    "竞猜管理：同步；添加 游戏|赛事|队伍A|队伍B|YYYY-MM-DD HH:MM；"
                     "结算 编号 队伍；退款 编号；封盘 编号；隐藏/显示 编号。"
                 )
         yield self._plain_result(event, message)

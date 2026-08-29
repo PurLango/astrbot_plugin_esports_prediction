@@ -241,7 +241,7 @@ class EsportsPredictionPageApi:
         team_a = self._text(payload.get("team_a"), 80)
         team_b = self._text(payload.get("team_b"), 80)
         start_time = self._text(payload.get("start_time"), 30)
-        if game not in {"lol", "valorant"} or not all((competition, team_a, team_b, start_time)):
+        if game not in {"lol", "valorant", "cs2", "kog"} or not all((competition, team_a, team_b, start_time)):
             return {"ok": False, "error": "请完整填写游戏、赛事、两支队伍和开赛时间。"}
         try:
             async with self.plugin._data_lock:
