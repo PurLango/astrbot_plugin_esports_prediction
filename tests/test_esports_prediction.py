@@ -73,7 +73,7 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         reply = await anext(plugin.esports_bet(FakeEvent("/竞猜")))
 
         self.assertIn("赛事竞猜使用方法", reply)
-        self.assertIn("/今日赛事 [撸/瓦/CS2/王者]", reply)
+        self.assertIn("/今日赛事 [撸/瓦/CS/农]", reply)
         self.assertIn("/竞猜 L001 TES 100", reply)
         self.assertIn("/改选 L001 BLG", reply)
         self.assertIn("/撤销竞猜 L001", reply)
@@ -164,7 +164,7 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
             plugin.esports_matches(FakeEvent("/今日赛事 dota"))
         )
 
-        self.assertIn("用法：/今日赛事 [撸/瓦/CS2/王者]", reply)
+        self.assertIn("用法：/今日赛事 [撸/瓦/CS/农]", reply)
 
     async def test_today_matches_can_filter_cs2_and_kog(self):
         plugin = build_plugin()
@@ -178,8 +178,8 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
             "kog", "KPL", "AG Super Play", "Wolves", "2026-08-29 20:00"
         )
 
-        cs2_reply = await anext(plugin.esports_matches(FakeEvent("/今日赛事 cs2")))
-        kog_reply = await anext(plugin.esports_matches(FakeEvent("/今日赛事 王者")))
+        cs2_reply = await anext(plugin.esports_matches(FakeEvent("/今日赛事 CS")))
+        kog_reply = await anext(plugin.esports_matches(FakeEvent("/今日赛事 农")))
 
         self.assertIn(cs2_match["display_id"], cs2_reply)
         self.assertNotIn(kog_match["display_id"], cs2_reply)
@@ -187,6 +187,32 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(kog_match["display_id"], kog_reply)
         self.assertNotIn(cs2_match["display_id"], kog_reply)
         self.assertIn("王者荣耀", kog_reply)
+
+    async def test_today_matches_are_grouped_by_game_then_start_time(self):
+        plugin = build_plugin()
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 28, 0, 0, tzinfo=datetime.timezone.utc
+        )
+        kog_match = plugin._create_manual_match_locked(
+            "kog", "KPL", "AG", "WB", "2026-08-29 10:00"
+        )
+        cs2_match = plugin._create_manual_match_locked(
+            "cs2", "BLAST", "Vitality", "Spirit", "2026-08-29 11:00"
+        )
+        valorant_match = plugin._create_manual_match_locked(
+            "valorant", "VCT", "EDG", "PRX", "2026-08-29 12:00"
+        )
+        lol_match = plugin._create_manual_match_locked(
+            "lol", "LPL", "BLG", "TES", "2026-08-29 13:00"
+        )
+
+        reply = await anext(plugin.esports_matches(FakeEvent("/今日赛事")))
+
+        positions = [
+            reply.index(match["display_id"])
+            for match in (lol_match, valorant_match, cs2_match, kog_match)
+        ]
+        self.assertEqual(positions, sorted(positions))
 
     async def test_match_detail_is_not_registered_as_a_chat_command(self):
         self.assertNotIn("赛事详情", REGISTERED_COMMAND_NAMES)

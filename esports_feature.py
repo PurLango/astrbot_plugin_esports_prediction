@@ -1354,8 +1354,19 @@ class EsportsPredictionMixin:
     def _select_matches_for_display(
         self, matches: list[Dict[str, Any]], limit: int = 10
     ) -> list[Dict[str, Any]]:
+        game_order = {
+            game: index for index, game in enumerate(SUPPORTED_ESPORTS_GAMES)
+        }
+
+        def display_key(item: Dict[str, Any]) -> tuple[int, datetime.datetime]:
+            return (
+                game_order.get(str(item.get("game", "")).lower(), len(game_order)),
+                self._parse_esports_datetime(item.get("start_time"))
+                or datetime.datetime.max.replace(tzinfo=datetime.timezone.utc),
+            )
+
         if len(matches) <= limit:
-            return matches
+            return sorted(matches, key=display_key)
         grouped: Dict[str, list[Dict[str, Any]]] = {}
         for match in matches:
             game = str(match.get("game", "") or "other").lower()
@@ -1373,11 +1384,7 @@ class EsportsPredictionMixin:
         ]
         selected.extend(remaining[: max(0, limit - len(selected))])
         selected = selected[:limit]
-        return sorted(
-            selected,
-            key=lambda item: self._parse_esports_datetime(item.get("start_time"))
-            or datetime.datetime.max.replace(tzinfo=datetime.timezone.utc),
-        )
+        return sorted(selected, key=display_key)
 
     @staticmethod
     def _resolve_match_game_filter(value: Any) -> str | None:
@@ -1402,6 +1409,7 @@ class EsportsPredictionMixin:
             "kpl": "kog",
             "王者": "kog",
             "王者荣耀": "kog",
+            "农": "kog",
         }
         return aliases.get(normalized)
 
@@ -1410,7 +1418,7 @@ class EsportsPredictionMixin:
             [
                 "【赛事竞猜使用方法】",
                 "",
-                "查看比赛：/今日赛事 [撸/瓦/CS2/王者]",
+                "查看比赛：/今日赛事 [撸/瓦/CS/农]",
                 "参与竞猜：/竞猜 L001 TES 100",
                 "追加同队：再次输入相同竞猜指令",
                 "改选队伍：/改选 L001 BLG",
@@ -1443,7 +1451,7 @@ class EsportsPredictionMixin:
         if game_filter is None:
             yield self._plain_result(
                 event,
-                "用法：/今日赛事 [撸/瓦/CS2/王者]\n也可以填写 lol、valorant、cs2、kog 或游戏全名。",
+                "用法：/今日赛事 [撸/瓦/CS/农]\n也可以填写 lol、valorant、cs2、kog 或游戏全名。",
             )
             return
         async with self._data_lock:
