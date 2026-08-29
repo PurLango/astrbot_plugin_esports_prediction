@@ -38,7 +38,6 @@ TIER_ONE_EXCLUSIONS = {
         "showmatch",
     ),
 }
-VALORANT_TOP_TOURNAMENT_TIERS = {"a", "s"}
 FINISHED_BET_STATUSES = {"won", "lost", "refunded"}
 OPEN_MATCH_STATUSES = {"not_started", "running"}
 REFUND_MATCH_STATUSES = {"canceled", "cancelled", "postponed", "abandoned"}
@@ -57,8 +56,8 @@ class EsportsPredictionMixin:
             "ratings": {},
             "rating_processed_match_ids": [],
             "display_sequences": {"lol": 0, "valorant": 0, "other": 0},
-            "tier_one_league_ids": {"lol": [], "valorant": []},
-            "tier_one_leagues_refreshed_at": {"lol": "", "valorant": ""},
+            "tier_one_league_ids": {"lol": []},
+            "tier_one_leagues_refreshed_at": {"lol": ""},
             "sync": {
                 "last_attempt_at": "",
                 "last_success_at": "",
@@ -218,7 +217,6 @@ class EsportsPredictionMixin:
             "source": str(raw_match.get("source", "manual") or "manual").strip()[:40],
             "source_id": str(raw_match.get("source_id", "") or "").strip()[:80],
             "league_id": str(raw_match.get("league_id", "") or "").strip()[:40],
-            "tournament_tier": str(raw_match.get("tournament_tier", "") or "").strip().lower()[:20],
             "game": str(raw_match.get("game", "") or "").strip().lower()[:20],
             "competition": str(raw_match.get("competition", "") or "").strip()[:120],
             "stage": str(raw_match.get("stage", "") or "").strip()[:120],
@@ -512,7 +510,6 @@ class EsportsPredictionMixin:
             "source": "pandascore",
             "source_id": source_id,
             "league_id": str(league.get("id", "") or "").strip(),
-            "tournament_tier": str(tournament.get("tier", "") or "").strip().lower(),
             "game": game,
             "competition": competition or "未命名赛事",
             "stage": str(raw.get("name", "") or "").strip()[:120],
@@ -567,18 +564,20 @@ class EsportsPredictionMixin:
                     text,
                 )
             )
-        tournament_tier = str(match.get("tournament_tier", "") or "").strip().lower()
-        if tournament_tier in VALORANT_TOP_TOURNAMENT_TIERS:
-            return True
         if not text:
             return False
         has_vct = re.search(r"\b(?:vct|valorant champions tour)\b", text)
         standalone_global = re.search(
             r"\bvalorant (?:masters|champions)(?! tour)\b", text
         )
-        return bool(has_vct or standalone_global)
+        regional_season = re.search(
+            r"\b(?:americas|emea|pacific|china|cn)\b", text
+        ) and re.search(
+            r"\b(?:kickoff|stage [12]|regular season|playoffs?)\b", text
+        )
+        return bool(has_vct or standalone_global or regional_season)
 
-    def _is_tier_one_league(self, game: str, league: Dict[str, Any]) -> bool:
+    def _is_tier_one_lol_league(self, league: Dict[str, Any]) -> bool:
         text = self._competition_filter_text(
             {
                 "_filter_text": " ".join(
@@ -589,23 +588,16 @@ class EsportsPredictionMixin:
                 )
             }
         )
-        if not text or any(token in text for token in TIER_ONE_EXCLUSIONS.get(game, ())):
+        if not text or any(token in text for token in TIER_ONE_EXCLUSIONS["lol"]):
             return False
-        if game == "lol":
-            return bool(
-                re.search(
-                    r"\b(?:lpl|lck|league of legends pro league|"
-                    r"league of legends champions korea|first stand|fst|"
-                    r"mid season invitational|msi|world championship|worlds)\b",
-                    text,
-                )
+        return bool(
+            re.search(
+                r"\b(?:lpl|lck|league of legends pro league|"
+                r"league of legends champions korea|first stand|fst|"
+                r"mid season invitational|msi|world championship|worlds)\b",
+                text,
             )
-        if game == "valorant":
-            return bool(
-                re.search(r"\b(?:vct|valorant champions tour)\b", text)
-                or re.search(r"\bvalorant (?:masters|champions)\b", text)
-            )
-        return False
+        )
 
     def _is_recent_match_result(
         self, match: Dict[str, Any], now: datetime.datetime | None = None
@@ -735,6 +727,8 @@ class EsportsPredictionMixin:
         created = not isinstance(existing, dict)
         if created:
             incoming["display_id"] = self._ensure_unique_display_id(incoming, matches)
+            incoming.setdefault("legacy_display_ids", [])
+            incoming.setdefault("visibility_override", "")
             self._calculate_match_odds_locked(incoming)
             incoming.pop("_filter_text", None)
             matches[match_id] = incoming
@@ -755,12 +749,15 @@ class EsportsPredictionMixin:
             "visibility_override": visibility_override,
             "created_at": existing.get("created_at", incoming.get("created_at", "")),
             "settled_at": existing.get("settled_at", ""),
+            "updated_at": existing.get("updated_at", ""),
         }
         incoming.update(preserved)
         incoming.pop("_filter_text", None)
         if not incoming["odds_locked"]:
             self._calculate_match_odds_locked(incoming)
         changed = incoming != existing
+        if changed:
+            incoming["updated_at"] = self._utcnow().isoformat(timespec="seconds")
         matches[match_id] = incoming
         return changed, False
 
@@ -955,78 +952,70 @@ class EsportsPredictionMixin:
         normalized_counts: Dict[str, int] = {
             game: 0 for game in settings["games"]
         }
-        target_league_ids: Dict[str, set[str]] = {
-            game: set() for game in settings["games"]
-        }
-        league_refresh_times: Dict[str, str] = {}
-        discovery_games: list[str] = []
-        async with self._data_lock:
-            esports = self._get_esports_store()
-            cached_league_ids = esports.setdefault(
-                "tier_one_league_ids", {"lol": [], "valorant": []}
-            )
-            cached_refresh_times = esports.setdefault(
-                "tier_one_leagues_refreshed_at", {"lol": "", "valorant": ""}
-            )
-            for game in target_league_ids:
-                target_league_ids[game].update(
+        lol_league_ids: set[str] = set()
+        lol_leagues_refreshed_at = ""
+        if "lol" in settings["games"]:
+            async with self._data_lock:
+                esports = self._get_esports_store()
+                cached_league_ids = esports.setdefault(
+                    "tier_one_league_ids", {"lol": []}
+                )
+                cached_refresh_times = esports.setdefault(
+                    "tier_one_leagues_refreshed_at", {"lol": ""}
+                )
+                lol_league_ids.update(
                     str(item).strip()
-                    for item in cached_league_ids.get(game, [])
+                    for item in cached_league_ids.get("lol", [])
                     if str(item).strip()
                 )
-                league_refresh_times[game] = str(
-                    cached_refresh_times.get(game, "") or ""
+                lol_leagues_refreshed_at = str(
+                    cached_refresh_times.get("lol", "") or ""
                 )
-            for stored_match in esports.setdefault("matches", {}).values():
-                if not isinstance(stored_match, dict) or not self._is_tier_one_match(stored_match):
-                    continue
-                game = str(stored_match.get("game", "") or "").lower()
-                league_id = str(stored_match.get("league_id", "") or "").strip()
-                if game in target_league_ids and league_id:
-                    target_league_ids[game].add(league_id)
+                for stored_match in esports.setdefault("matches", {}).values():
+                    if (
+                        not isinstance(stored_match, dict)
+                        or str(stored_match.get("game", "")).lower() != "lol"
+                        or not self._is_tier_one_match(stored_match)
+                    ):
+                        continue
+                    league_id = str(
+                        stored_match.get("league_id", "") or ""
+                    ).strip()
+                    if league_id:
+                        lol_league_ids.add(league_id)
 
-            for game, league_ids in target_league_ids.items():
-                refreshed_at = self._parse_esports_datetime(
-                    league_refresh_times.get(game)
-                )
-                refresh_expired = (
-                    refreshed_at is None
-                    or attempt_time - refreshed_at
-                    >= datetime.timedelta(hours=LEAGUE_DISCOVERY_REFRESH_HOURS)
-                )
-                if game == "lol" and (refresh_expired or not league_ids):
-                    discovery_games.append(game)
-
-        discovery_requests = [
-            (game, provider.fetch_leagues(game)) for game in discovery_games
-        ]
-        discovery_responses = await asyncio.gather(
-            *(item[1] for item in discovery_requests), return_exceptions=True
-        )
-        for (game, _), response in zip(discovery_requests, discovery_responses):
-            if isinstance(response, BaseException):
-                errors.append(f"{game}/leagues: {response}")
-                continue
-            if not isinstance(response, list):
-                errors.append(f"{game}/leagues: 数据格式不符合预期")
-                continue
-            discovered_ids = {
-                str(league.get("id", "") or "").strip()
-                for league in response
-                if isinstance(league, dict)
-                and self._is_tier_one_league(game, league)
-                and str(league.get("id", "") or "").strip()
-            }
-            league_refresh_times[game] = attempt_at
-            if discovered_ids:
-                target_league_ids[game] = discovered_ids
+            refreshed_at = self._parse_esports_datetime(lol_leagues_refreshed_at)
+            refresh_expired = (
+                refreshed_at is None
+                or attempt_time - refreshed_at
+                >= datetime.timedelta(hours=LEAGUE_DISCOVERY_REFRESH_HOURS)
+            )
+            if refresh_expired or not lol_league_ids:
+                try:
+                    response = await provider.fetch_leagues("lol")
+                except Exception as exc:
+                    errors.append(f"lol/leagues: {exc}")
+                else:
+                    if not isinstance(response, list):
+                        errors.append("lol/leagues: 数据格式不符合预期")
+                    else:
+                        discovered_ids = {
+                            str(league.get("id", "") or "").strip()
+                            for league in response
+                            if isinstance(league, dict)
+                            and self._is_tier_one_lol_league(league)
+                            and str(league.get("id", "") or "").strip()
+                        }
+                        lol_leagues_refreshed_at = attempt_at
+                        if discovered_ids:
+                            lol_league_ids = discovered_ids
 
         requests = []
-        for game, league_ids in target_league_ids.items():
-            if game == "lol" and not league_ids:
+        for game in settings["games"]:
+            if game == "lol" and not lol_league_ids:
                 errors.append(f"{game}/leagues: 未找到允许的赛事")
                 continue
-            allowed_ids = () if game == "valorant" else tuple(sorted(league_ids))
+            allowed_ids = tuple(sorted(lol_league_ids)) if game == "lol" else ()
             for state in ("past", "running", "upcoming"):
                 requests.append(
                     (
@@ -1068,10 +1057,6 @@ class EsportsPredictionMixin:
                 if normalized:
                     fetched.append(normalized)
                     normalized_counts[game] = normalized_counts.get(game, 0) + 1
-                    if self._is_tier_one_match(normalized):
-                        league_id = str(normalized.get("league_id", "") or "").strip()
-                        if league_id:
-                            target_league_ids.setdefault(game, set()).add(league_id)
 
         for (game, state, _), response in zip(requests, responses):
             collect_response(game, state, response)
@@ -1079,15 +1064,13 @@ class EsportsPredictionMixin:
         if not fetched and errors:
             async with self._data_lock:
                 esports = self._get_esports_store()
-                cached_ids = esports.setdefault(
-                    "tier_one_league_ids", {"lol": [], "valorant": []}
-                )
+                cached_ids = esports.setdefault("tier_one_league_ids", {"lol": []})
                 cached_refresh = esports.setdefault(
-                    "tier_one_leagues_refreshed_at", {"lol": "", "valorant": ""}
+                    "tier_one_leagues_refreshed_at", {"lol": ""}
                 )
-                for game, league_ids in target_league_ids.items():
-                    cached_ids[game] = sorted(league_ids)
-                    cached_refresh[game] = league_refresh_times.get(game, "")
+                if "lol" in settings["games"]:
+                    cached_ids["lol"] = sorted(lol_league_ids)
+                    cached_refresh["lol"] = lol_leagues_refreshed_at
                 sync = esports.setdefault("sync", {})
                 sync["last_attempt_at"] = attempt_at
                 sync["last_error"] = "；".join(errors)[:500]
@@ -1115,15 +1098,13 @@ class EsportsPredictionMixin:
         now = self._utcnow()
         async with self._data_lock:
             esports = self._get_esports_store()
-            cached_ids = esports.setdefault(
-                "tier_one_league_ids", {"lol": [], "valorant": []}
-            )
+            cached_ids = esports.setdefault("tier_one_league_ids", {"lol": []})
             cached_refresh = esports.setdefault(
-                "tier_one_leagues_refreshed_at", {"lol": "", "valorant": ""}
+                "tier_one_leagues_refreshed_at", {"lol": ""}
             )
-            for game, league_ids in target_league_ids.items():
-                cached_ids[game] = sorted(league_ids)
-                cached_refresh[game] = league_refresh_times.get(game, "")
+            if "lol" in settings["games"]:
+                cached_ids["lol"] = sorted(lol_league_ids)
+                cached_refresh["lol"] = lol_leagues_refreshed_at
             matches = esports.setdefault("matches", {})
             for match in ordered:
                 match_id = match["id"]
@@ -1152,12 +1133,22 @@ class EsportsPredictionMixin:
                 created += int(was_created)
                 updated += int(changed and not was_created)
             settled, refunded = self._settle_ready_matches_locked()
+            available_matches = self._visible_upcoming_matches_locked()
+            available_counts = {
+                game: sum(
+                    1
+                    for match in available_matches
+                    if match.get("game") == game
+                )
+                for game in settings["games"]
+            }
             sync = self._get_esports_store().setdefault("sync", {})
             sync["last_attempt_at"] = attempt_at
             sync["last_success_at"] = self._utcnow().isoformat(timespec="seconds")
             sync["last_error"] = "；".join(errors)[:500]
             game_summary = "，".join(
-                f"{'LoL' if game == 'lol' else 'VALORANT'} 原始 {raw_counts.get(game, 0)}/收录 {accepted_counts.get(game, 0)}"
+                f"{'LoL' if game == 'lol' else 'VALORANT'} 原始 {raw_counts.get(game, 0)}"
+                f"/收录 {accepted_counts.get(game, 0)}/可竞猜 {available_counts.get(game, 0)}"
                 for game in settings["games"]
             )
             sync["last_summary"] = (
@@ -1180,6 +1171,7 @@ class EsportsPredictionMixin:
                     "raw": raw_counts.get(game, 0),
                     "normalized": normalized_counts.get(game, 0),
                     "accepted": accepted_counts.get(game, 0),
+                    "available": available_counts.get(game, 0),
                 }
                 for game in settings["games"]
             },

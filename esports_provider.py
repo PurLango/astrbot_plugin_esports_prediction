@@ -20,12 +20,6 @@ LEAGUE_SEARCH_TERMS = {
         "World Championship",
         "Worlds",
     ),
-    "valorant": (
-        "VCT",
-        "Valorant Champions Tour",
-        "Valorant Masters",
-        "Valorant Champions",
-    ),
 }
 
 
@@ -130,8 +124,8 @@ class PandaScoreProvider:
         pages: int = 2,
     ) -> list[dict[str, Any]]:
         normalized_game = str(game or "").strip().lower()
-        if normalized_game not in {"lol", "valorant"}:
-            raise EsportsProviderError(f"不支持的数据源游戏类型：{game}")
+        if normalized_game not in LEAGUE_SEARCH_TERMS:
+            raise EsportsProviderError(f"该游戏不需要查询联赛目录：{game}")
 
         size = max(1, min(int(page_size), 100))
         page_limit = max(1, min(int(pages), 5))
