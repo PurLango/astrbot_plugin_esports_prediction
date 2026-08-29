@@ -72,6 +72,21 @@ class EsportsPageApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(recent["id"], ids)
         self.assertNotIn(old["id"], ids)
 
+    async def test_hide_action_marks_visibility_as_admin_override(self):
+        match = self.plugin._create_manual_match_locked(
+            "lol", "LPL", "Bilibili Gaming", "Top Esports", "2026-08-26 20:00"
+        )
+
+        async def payload():
+            return {"action": "hide", "match_id": match["id"]}
+
+        self.api._payload = payload
+        result = await self.api.match_action()
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(match["visible"])
+        self.assertEqual(match["visibility_override"], "hidden")
+
 
 if __name__ == "__main__":
     unittest.main()

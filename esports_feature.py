@@ -200,6 +200,11 @@ class EsportsPredictionMixin:
             )
         odds = raw_match.get("odds", {})
         probabilities = raw_match.get("probabilities", {})
+        visibility_override = str(
+            raw_match.get("visibility_override", "") or ""
+        ).strip().lower()
+        if visibility_override not in {"hidden", "shown"}:
+            visibility_override = ""
         normalized = {
             "id": match_id,
             "display_id": str(raw_match.get("display_id", "") or "").strip()[:24],
@@ -253,6 +258,7 @@ class EsportsPredictionMixin:
             },
             "odds_locked": bool(raw_match.get("odds_locked", False)),
             "visible": bool(raw_match.get("visible", True)),
+            "visibility_override": visibility_override,
             "settled_at": str(raw_match.get("settled_at", "") or "").strip()[:40],
             "created_at": str(raw_match.get("created_at", "") or "").strip()[:40],
             "updated_at": str(raw_match.get("updated_at", "") or "").strip()[:40],
@@ -734,13 +740,19 @@ class EsportsPredictionMixin:
             matches[match_id] = incoming
             return True, True
 
+        visibility_override = str(
+            existing.get("visibility_override", "") or ""
+        ).strip().lower()
+        if visibility_override not in {"hidden", "shown"}:
+            visibility_override = ""
         preserved = {
             "display_id": existing.get("display_id", ""),
             "legacy_display_ids": existing.get("legacy_display_ids", []),
             "odds": existing.get("odds", {}),
             "probabilities": existing.get("probabilities", {}),
             "odds_locked": bool(existing.get("odds_locked", False)),
-            "visible": bool(existing.get("visible", True)),
+            "visible": visibility_override != "hidden",
+            "visibility_override": visibility_override,
             "created_at": existing.get("created_at", incoming.get("created_at", "")),
             "settled_at": existing.get("settled_at", ""),
         }
@@ -1120,10 +1132,6 @@ class EsportsPredictionMixin:
                     ignored += 1
                     if isinstance(existing, dict):
                         changed, _ = self._upsert_synced_match_locked(match)
-                        stored_match = matches[match_id]
-                        if stored_match.get("visible", True):
-                            stored_match["visible"] = False
-                            changed = True
                         updated += int(changed)
                     continue
                 status = str(match.get("status", "")).lower()
@@ -1826,6 +1834,9 @@ class EsportsPredictionMixin:
                     message = "未找到比赛。"
                 else:
                     match["visible"] = command in {"显示", "show"}
+                    match["visibility_override"] = (
+                        "shown" if match["visible"] else "hidden"
+                    )
                     await self._save_data_locked()
                     message = f"已{'显示' if match['visible'] else '隐藏'} {match['display_id']}。"
             else:

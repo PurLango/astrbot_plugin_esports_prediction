@@ -282,6 +282,9 @@ class EsportsPredictionPageApi:
                 message = "已封盘。"
             elif action in {"hide", "show"}:
                 match["visible"] = action == "show"
+                match["visibility_override"] = (
+                    "shown" if match["visible"] else "hidden"
+                )
                 message = "已更新显示状态。"
             else:
                 return {"ok": False, "error": "不支持的操作。"}

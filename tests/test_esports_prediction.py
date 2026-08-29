@@ -474,6 +474,32 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         stored = plugin.data["esports"]["matches"][match["id"]]
         self.assertEqual(stored["odds"], original_odds)
 
+    async def test_sync_restores_legacy_auto_hidden_match_when_reaccepted(self):
+        plugin = build_plugin()
+        match = add_future_match(plugin)
+        match["visible"] = False
+        incoming = dict(match)
+        incoming["visible"] = True
+
+        plugin._upsert_synced_match_locked(incoming)
+
+        stored = plugin.data["esports"]["matches"][match["id"]]
+        self.assertTrue(stored["visible"])
+
+    async def test_sync_preserves_admin_hidden_match(self):
+        plugin = build_plugin()
+        match = add_future_match(plugin)
+        match["visible"] = False
+        match["visibility_override"] = "hidden"
+        incoming = dict(match)
+        incoming["visible"] = True
+
+        plugin._upsert_synced_match_locked(incoming)
+
+        stored = plugin.data["esports"]["matches"][match["id"]]
+        self.assertFalse(stored["visible"])
+        self.assertEqual(stored["visibility_override"], "hidden")
+
     async def test_model_odds_follow_elo_strength(self):
         plugin = build_plugin()
         match = add_future_match(plugin)
