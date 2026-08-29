@@ -1026,7 +1026,7 @@ class EsportsPredictionMixin:
                 errors.append(f"{game}/leagues: 未找到允许的赛事")
                 continue
             allowed_ids = tuple(sorted(lol_league_ids)) if game == "lol" else ()
-            for state in ("past", "running", "upcoming"):
+            for state in ("running", "upcoming"):
                 requests.append(
                     (
                         game,
@@ -1039,8 +1039,6 @@ class EsportsPredictionMixin:
                                 if game == "valorant"
                                 and not allowed_ids
                                 and state == "upcoming"
-                                else 3
-                                if state == "past"
                                 else 2
                                 if state == "upcoming"
                                 else 1
@@ -1069,6 +1067,50 @@ class EsportsPredictionMixin:
                     normalized_counts[game] = normalized_counts.get(game, 0) + 1
 
         for (game, state, _), response in zip(requests, responses):
+            collect_response(game, state, response)
+
+        history_league_ids: Dict[str, set[str]] = {
+            game: set() for game in settings["games"]
+        }
+        if "lol" in history_league_ids:
+            history_league_ids["lol"].update(lol_league_ids)
+        for match in fetched:
+            game = str(match.get("game", "") or "").lower()
+            league_id = str(match.get("league_id", "") or "").strip()
+            if (
+                game in history_league_ids
+                and league_id
+                and self._is_tier_one_match(match)
+            ):
+                history_league_ids[game].add(league_id)
+        async with self._data_lock:
+            stored_matches = self._get_esports_store().setdefault("matches", {})
+            for match in stored_matches.values():
+                if not isinstance(match, dict) or not self._is_tier_one_match(match):
+                    continue
+                game = str(match.get("game", "") or "").lower()
+                league_id = str(match.get("league_id", "") or "").strip()
+                if game in history_league_ids and league_id:
+                    history_league_ids[game].add(league_id)
+
+        history_requests = [
+            (
+                game,
+                "past",
+                provider.fetch_matches(
+                    game,
+                    "past",
+                    pages=3,
+                    league_ids=tuple(sorted(history_league_ids[game])),
+                ),
+            )
+            for game in settings["games"]
+            if history_league_ids[game]
+        ]
+        history_responses = await asyncio.gather(
+            *(item[2] for item in history_requests), return_exceptions=True
+        )
+        for (game, state, _), response in zip(history_requests, history_responses):
             collect_response(game, state, response)
 
         if not fetched and errors:

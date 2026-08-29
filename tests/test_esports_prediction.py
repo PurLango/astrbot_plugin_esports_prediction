@@ -740,6 +740,60 @@ class TargetedHistoryProvider:
 
 
 class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_odds_history_uses_league_ids_discovered_from_current_matches(self):
+        class CurrentLeagueHistoryProvider:
+            calls = []
+
+            def __init__(self, token, **kwargs):
+                pass
+
+            @staticmethod
+            def match(match_id, begin_at, first_id, second_id, winner_id=""):
+                return {
+                    "id": match_id,
+                    "status": "finished" if winner_id else "not_started",
+                    "begin_at": begin_at,
+                    "winner_id": winner_id or None,
+                    "opponents": [
+                        {"id": first_id, "name": f"Team {first_id}", "acronym": f"T{first_id}"},
+                        {"id": second_id, "name": f"Team {second_id}", "acronym": f"T{second_id}"},
+                    ],
+                    "league": {"id": 4531, "name": "VCT", "slug": "legacy-challengers"},
+                    "serie": {"name": "Pacific Stage 2 2026"},
+                    "tournament": {"name": "Playoffs"},
+                }
+
+            async def fetch_matches(self, game, state, **kwargs):
+                league_ids = tuple(str(item) for item in kwargs.get("league_ids", ()))
+                self.calls.append((game, state, league_ids))
+                if state == "upcoming":
+                    return [self.match(9001, "2026-08-30T12:00:00Z", 1, 2)]
+                if state == "past" and league_ids == ("4531",):
+                    return [
+                        self.match(8001, "2026-08-25T12:00:00Z", 1, 11, 1),
+                        self.match(8002, "2026-08-26T12:00:00Z", 1, 12, 1),
+                        self.match(8003, "2026-08-27T12:00:00Z", 13, 2, 13),
+                    ]
+                return []
+
+        plugin = build_plugin()
+        plugin.config["esports_prediction_settings"]["games"] = ["valorant"]
+        plugin._utcnow = lambda: datetime.datetime(
+            2026, 8, 29, 0, 0, tzinfo=datetime.timezone.utc
+        )
+        original = esports_feature.PandaScoreProvider
+        esports_feature.PandaScoreProvider = CurrentLeagueHistoryProvider
+        CurrentLeagueHistoryProvider.calls = []
+        try:
+            result = await plugin._sync_esports_once("公共赔率历史同步")
+        finally:
+            esports_feature.PandaScoreProvider = original
+
+        match = plugin._get_esports_store()["matches"]["pandascore:valorant:9001"]
+        self.assertIn(("valorant", "past", ("4531",)), CurrentLeagueHistoryProvider.calls)
+        self.assertEqual(result["rating_updates"], 3)
+        self.assertNotEqual(match["odds"]["1"], match["odds"]["2"])
+
     async def test_vct_sync_does_not_depend_on_partial_league_catalog(self):
         class PartialCatalogProvider:
             calls = []
@@ -843,7 +897,12 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
 
         valorant_calls = [call for call in PartialCatalogProvider.calls if call[0] == "valorant"]
         self.assertTrue(valorant_calls)
-        self.assertTrue(all(not call[2] for call in valorant_calls))
+        schedule_calls = [call for call in valorant_calls if call[1] != "past"]
+        history_calls = [call for call in valorant_calls if call[1] == "past"]
+        self.assertTrue(all(not call[2] for call in schedule_calls))
+        self.assertTrue(
+            any(call[2] == ("7901", "7902", "7903") for call in history_calls)
+        )
         self.assertEqual(
             {
                 "pandascore:valorant:790101",
@@ -1022,7 +1081,10 @@ class EsportsSyncFilterTests(unittest.IsolatedAsyncioTestCase):
             if call[0] == "valorant" and call[1] != "leagues"
         ]
         self.assertTrue(valorant_match_calls)
-        self.assertTrue(all(not call[2] for call in valorant_match_calls))
+        schedule_calls = [call for call in valorant_match_calls if call[1] != "past"]
+        history_calls = [call for call in valorant_match_calls if call[1] == "past"]
+        self.assertTrue(all(not call[2] for call in schedule_calls))
+        self.assertTrue(all(call[2] == ("7701",) for call in history_calls))
         self.assertEqual(second_result["updated"], 0)
         self.assertIn(
             "pandascore:valorant:770001",
