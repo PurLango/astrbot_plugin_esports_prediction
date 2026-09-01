@@ -151,6 +151,11 @@ class LotteryFeatureMixin:
             lottery_cfg.get("group_distribution_ratios"),
             DEFAULT_GROUP_LOTTERY_RATIOS,
         )
+        group_distribution_mode = str(
+            lottery_cfg.get("group_distribution_mode", "configured") or "configured"
+        ).strip().lower()
+        if group_distribution_mode not in {"configured", "random"}:
+            group_distribution_mode = "configured"
         group_required_participants = self._normalize_int(
             lottery_cfg.get("group_required_participants"), 5, minimum=2
         )
@@ -186,6 +191,7 @@ class LotteryFeatureMixin:
                 lottery_cfg.get("group_daily_limit_per_user"), 1, minimum=1
             ),
             "group_required_participants": group_required_participants,
+            "group_distribution_mode": group_distribution_mode,
             "group_distribution_ratios": group_ratios,
         }
 
@@ -250,6 +256,14 @@ class LotteryFeatureMixin:
         if len(ratios) < participant_count:
             ratios.extend([fill_value] * (participant_count - len(ratios)))
         return ratios
+
+    def _calculate_random_group_lottery_rewards(
+        self, total_points: int, participant_count: int
+    ) -> list[int]:
+        if participant_count <= 0:
+            return []
+        random_ratios = [max(random.random(), 1e-9) for _ in range(participant_count)]
+        return self._calculate_group_lottery_rewards(total_points, random_ratios)
 
     def _refund_expired_group_lottery_locked(
         self, group_info: Dict[str, Any], today: str
@@ -472,7 +486,7 @@ class LotteryFeatureMixin:
                             f"{prefix}{reply_name}已加入群体抽奖池，扣除 "
                             f"{lottery_cfg['group_cost']} {points_name}。"
                             f"当前人数 {participant_count}/{required_count}，"
-                            "凑齐后将按配置比例分配奖池。"
+                            f"凑齐后将{'完全随机' if lottery_cfg['group_distribution_mode'] == 'random' else '按配置权重'}分配奖池。"
                         )
                     else:
                         shuffled_participants = list(participants)
@@ -482,14 +496,20 @@ class LotteryFeatureMixin:
                             self._normalize_int(item.get("paid_points"), 0, 0)
                             for item in shuffled_participants
                         )
-                        reward_ratios = self._resolve_group_lottery_ratios(
-                            lottery_cfg["group_distribution_ratios"],
-                            participant_count,
-                        )
-                        rewards = self._calculate_group_lottery_rewards(
-                            total_pool_points,
-                            reward_ratios,
-                        )
+                        if lottery_cfg["group_distribution_mode"] == "random":
+                            reward_ratios = []
+                            rewards = self._calculate_random_group_lottery_rewards(
+                                total_pool_points, participant_count
+                            )
+                        else:
+                            reward_ratios = self._resolve_group_lottery_ratios(
+                                lottery_cfg["group_distribution_ratios"],
+                                participant_count,
+                            )
+                            rewards = self._calculate_group_lottery_rewards(
+                                total_pool_points,
+                                reward_ratios,
+                            )
 
                         results: list[tuple[str, int]] = []
                         for participant, reward_points in zip(
@@ -527,7 +547,8 @@ class LotteryFeatureMixin:
                             "群体抽奖开奖: "
                             f"group={group_id}, date={today}, participants="
                             f"{[(str(item.get('user_id', '')).strip(), self._normalize_int(item.get('paid_points'), 0, 0)) for item in shuffled_participants]}, "
-                            f"ratios={reward_ratios}, rewards={rewards}, total_pool={total_pool_points}"
+                            f"mode={lottery_cfg['group_distribution_mode']}, ratios={reward_ratios}, "
+                            f"rewards={rewards}, total_pool={total_pool_points}"
                         )
 
                         results.sort(key=lambda item: item[1], reverse=True)
@@ -535,7 +556,8 @@ class LotteryFeatureMixin:
                         if refund_notice:
                             lines.append(refund_notice)
                         lines.append(
-                            f"群体抽奖已满 {participant_count} 人并开奖，总奖池 {total_pool_points} {points_name}。"
+                            f"群体抽奖已满 {participant_count} 人并开奖，总奖池 {total_pool_points} {points_name}，"
+                            f"{'完全随机分配' if lottery_cfg['group_distribution_mode'] == 'random' else '按配置权重分配'}。"
                         )
                         for index, (display_name, reward_points) in enumerate(
                             results, start=1

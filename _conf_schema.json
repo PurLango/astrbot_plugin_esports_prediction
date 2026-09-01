@@ -404,10 +404,16 @@
         "hint": "群体抽奖达到该人数后立即开奖。",
         "default": 5
       },
+      "group_distribution_mode": {
+        "description": "群体抽奖分配方式",
+        "type": "string",
+        "hint": "configured 按下方权重分配；random 每轮完全随机拆分总奖池。",
+        "default": "configured"
+      },
       "group_distribution_ratios": {
-        "description": "群体抽奖分配比例",
+        "description": "群体抽奖奖励权重",
         "type": "list",
-        "hint": "按参与人数顺序对应的分配比例，例如 1,9,20,25,35。比例会自动归一化后分配奖池。",
+        "hint": "每项代表一档奖励权重，例如 1,9,20,25,35；实际积分按总奖池换算并随机分配给参与者。",
         "default": [1, 9, 20, 25, 35]
       }
     }

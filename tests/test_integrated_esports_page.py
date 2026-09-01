@@ -46,6 +46,14 @@ class IntegratedEsportsPageTests(unittest.TestCase):
         self.assertIn("lottery_settings.personal_prizes.fifth.weight", script)
         self.assertIn("个人抽奖期望返还", script)
 
+    def test_operations_console_contains_group_lottery_distribution_editor(self):
+        script = (ROOT / "pages" / "兑换管理" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("lottery_settings.group_distribution_mode", script)
+        self.assertIn("lottery_settings.group_distribution_ratios", script)
+        self.assertIn("完全随机", script)
+
 
 if __name__ == "__main__":
     unittest.main()

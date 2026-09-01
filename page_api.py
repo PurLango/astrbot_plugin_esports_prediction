@@ -63,6 +63,8 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
         "group_cost": 20,
         "group_daily_limit_per_user": 1,
         "group_required_participants": 5,
+        "group_distribution_mode": "configured",
+        "group_distribution_ratios": [1, 9, 20, 25, 35],
     },
     "leaderboard_settings": {
         "display_limit": 10,
@@ -103,6 +105,7 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
 SETTINGS_SELECTS = {
     "sign_in_settings.sign_in_mode": {"random", "fixed"},
     "lottery_settings.default_mode": {"personal", "group"},
+    "lottery_settings.group_distribution_mode": {"configured", "random"},
 }
 
 SETTINGS_MINIMUMS = {
@@ -118,6 +121,7 @@ SETTINGS_MINIMUMS = {
     "activity_settings.cooldown_seconds": 0,
     "activity_settings.daily_limit": 0,
     "birthday_settings.reward_points": 0,
+    "lottery_settings.group_required_participants": 2,
     "red_packet_settings.expire_minutes": 0,
 }
 
@@ -305,6 +309,21 @@ class PointSystemPageApi:
             total_weight += prize["weight"]
         if total_weight <= 0:
             return {}, "个人抽奖至少一个奖项权重需要大于 0"
+        group_settings = result["lottery_settings"]
+        normalized_ratios = []
+        for raw_ratio in group_settings["group_distribution_ratios"]:
+            try:
+                ratio = float(raw_ratio)
+            except (TypeError, ValueError):
+                return {}, "群体抽奖奖励权重必须是数字"
+            if ratio <= 0:
+                return {}, "群体抽奖奖励权重必须大于 0"
+            normalized_ratios.append(ratio)
+        if group_settings["group_distribution_mode"] == "configured":
+            required = group_settings["group_required_participants"]
+            if len(normalized_ratios) != required:
+                return {}, f"群体抽奖需要填写 {required} 个奖励权重"
+        group_settings["group_distribution_ratios"] = normalized_ratios
         return result, ""
 
     def _config_revision(self) -> str:

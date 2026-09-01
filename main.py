@@ -121,7 +121,7 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "赛事积分竞猜是一个面向 AstrBot 群聊的电竞赛事竞猜与积分互动插件，支持多项目赛程同步、动态倍率、积分下注、自动结算，以及签到、抽奖和兑换等积分功能。",
-    "2.6.2",
+    "2.7.0",
     "https://github.com/PurLango/astrbot_plugin_esports_prediction",
 )
 class PointSystemPlugin(
@@ -3290,7 +3290,8 @@ class PointSystemPlugin(
                 mode_lines.append(
                     f"群体抽奖每次 {lottery_cfg['group_cost']} {points_name}，"
                     f"每人每天 {lottery_cfg['group_daily_limit_per_user']} 次，"
-                    f"满 {lottery_cfg['group_required_participants']} 人开奖"
+                    f"满 {lottery_cfg['group_required_participants']} 人开奖，"
+                    f"{'完全随机分配' if lottery_cfg['group_distribution_mode'] == 'random' else '按配置权重分配'}"
                 )
             lines.append(
                 "12. 积分抽奖："

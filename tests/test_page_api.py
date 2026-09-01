@@ -137,6 +137,14 @@ class PageApiTests(unittest.TestCase):
         self.assertEqual(prizes["first"]["weight"], 1.0)
         self.assertEqual(prizes["fifth"]["label"], "五等奖")
         self.assertEqual(len(prizes), 5)
+        self.assertEqual(
+            settings["lottery_settings"]["group_distribution_mode"],
+            "configured",
+        )
+        self.assertEqual(
+            settings["lottery_settings"]["group_distribution_ratios"],
+            [1.0, 9.0, 20.0, 25.0, 35.0],
+        )
 
     def test_personal_lottery_prizes_validate_ranges_and_weights(self):
         settings = self.api._settings_view()
@@ -172,6 +180,44 @@ class PageApiTests(unittest.TestCase):
             prize["weight"] = 0
         _, error = self.api._validate_settings(settings)
         self.assertIn("至少一个奖项权重", error)
+
+    def test_group_lottery_configured_weights_match_participant_count(self):
+        settings = self.api._settings_view()
+        settings["lottery_settings"].update(
+            {
+                "group_required_participants": 3,
+                "group_distribution_mode": "configured",
+                "group_distribution_ratios": ["1", "1", "3"],
+            }
+        )
+
+        validated, error = self.api._validate_settings(settings)
+
+        self.assertEqual(error, "")
+        self.assertEqual(
+            validated["lottery_settings"]["group_distribution_ratios"],
+            [1.0, 1.0, 3.0],
+        )
+
+        settings["lottery_settings"]["group_distribution_ratios"] = ["1", "3"]
+        _, error = self.api._validate_settings(settings)
+        self.assertIn("需要填写 3 个奖励权重", error)
+
+    def test_group_lottery_random_mode_accepts_empty_weights(self):
+        settings = self.api._settings_view()
+        settings["lottery_settings"].update(
+            {
+                "group_distribution_mode": "random",
+                "group_distribution_ratios": [],
+            }
+        )
+
+        validated, error = self.api._validate_settings(settings)
+
+        self.assertEqual(error, "")
+        self.assertEqual(
+            validated["lottery_settings"]["group_distribution_ratios"], []
+        )
 
 
 if __name__ == "__main__":

@@ -58,7 +58,9 @@
       { path: "lottery_settings.group_enabled", label: "启用群体抽奖", hint: "允许多人组池开奖", type: "boolean" },
       { path: "lottery_settings.group_cost", label: "群体抽奖消耗", hint: "每人加入群体抽奖的积分", type: "number", min: 1 },
       { path: "lottery_settings.group_daily_limit_per_user", label: "群体每日次数", hint: "每位用户每天最多参与次数", type: "number", min: 1 },
-      { path: "lottery_settings.group_required_participants", label: "开奖所需人数", hint: "达到人数后自动开奖", type: "number", min: 1 },
+      { path: "lottery_settings.group_required_participants", label: "开奖所需人数", hint: "达到人数后自动开奖", type: "number", min: 2 },
+      { path: "lottery_settings.group_distribution_mode", label: "群体奖池分配", hint: "固定权重或每轮完全随机拆分总奖池", type: "select", options: [["configured", "按配置权重"], ["random", "完全随机"]] },
+      { path: "lottery_settings.group_distribution_ratios", label: "群体奖励权重", hint: "按配置权重时生效；每行一档，数量须与开奖人数一致", type: "textarea", full: true },
     ] },
     { id: "lotteryPrizes", label: "个人奖池", icon: "trophy", description: "设置五档奖项的名称、奖励区间和抽取权重。概率及期望返还会自动计算。", summary: "personalLottery", fields: [
       { path: "lottery_settings.personal_prizes.first.label", label: "一等奖名称", hint: "展示给中奖用户的奖项名称", type: "text" },
@@ -845,7 +847,7 @@
     } else if (field.type === "select") {
       control = `<select data-setting-path="${escapeHtml(field.path)}">${field.options.map(([optionValue, label]) => `<option value="${escapeHtml(optionValue)}" ${String(value) === optionValue ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select>`;
     } else if (["textarea", "list"].includes(field.type)) {
-      const display = field.type === "list" && Array.isArray(value) ? value.join("\n") : String(value ?? "");
+      const display = Array.isArray(value) ? value.join("\n") : String(value ?? "");
       control = `<textarea data-setting-path="${escapeHtml(field.path)}" data-setting-type="${field.type}" rows="3">${escapeHtml(display)}</textarea>`;
     } else {
       const type = field.type === "time" ? "time" : field.type === "number" ? "number" : "text";
