@@ -45,6 +45,21 @@ except ModuleNotFoundError:
         def __init__(self, *args, **kwargs):
             self.text = kwargs.get("text", args[0] if args else "")
 
+    class Image(Component):
+        @classmethod
+        def fromURL(cls, url):
+            result = cls()
+            result.url = url
+            result.file = url
+            return result
+
+        @classmethod
+        def fromBase64(cls, value):
+            result = cls()
+            result.base64 = value
+            result.file = f"base64://{value}"
+            return result
+
     class Context:
         pass
 
@@ -96,6 +111,7 @@ except ModuleNotFoundError:
     event.MessageChain = MessageChain
     event.filter = DummyFilter()
     components.At = type("At", (Component,), {})
+    components.Image = Image
     components.Plain = type("Plain", (Component,), {})
     components.Reply = type("Reply", (Component,), {})
     star.Context = Context

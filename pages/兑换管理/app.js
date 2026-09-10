@@ -91,8 +91,19 @@
       { path: "birthday_settings.auto_broadcast_enabled", label: "寿星自动播报", hint: "每天定时播报当天寿星", type: "boolean" },
       { path: "birthday_settings.auto_broadcast_time", label: "播报时间", hint: "24 小时制，例如 08:00", type: "time" },
     ] },
+    { id: "imageGeneration", label: "AI 生图", icon: "image", description: "配置 OpenAI 兼容的生图接口、积分消耗和每日次数。", fields: [
+      { path: "image_generation_settings.enabled", label: "启用 AI 生图", hint: "开放 /生图 提示词", type: "boolean" },
+      { path: "image_generation_settings.api_url", label: "生图 API 地址", hint: "完整 images/generations 地址；填写到 /v1 时会自动补全", type: "text", full: true },
+      { path: "image_generation_settings.api_key", label: "生图 API Key", hint: "留空保持现有密钥；密钥不会从服务端回显", type: "password", configuredPath: "image_generation_settings.api_key_configured", full: true },
+      { path: "image_generation_settings.model", label: "生图模型", hint: "例如 gpt-image-1 或接口提供的模型名", type: "text" },
+      { path: "image_generation_settings.size", label: "图片尺寸", hint: "例如 1024x1024；留空由接口决定", type: "text" },
+      { path: "image_generation_settings.cost", label: "每次消耗积分", hint: "API 成功返回图片后计入使用；失败自动退款", type: "number", min: 0 },
+      { path: "image_generation_settings.daily_limit", label: "每人每日上限", hint: "每位用户每天最多成功生图次数", type: "number", min: 1 },
+      { path: "image_generation_settings.timeout_seconds", label: "接口超时秒数", hint: "建议 60～180 秒", type: "number", min: 10, max: 600 },
+      { path: "image_generation_settings.max_prompt_length", label: "提示词长度上限", hint: "限制单次提交的提示词字符数", type: "number", min: 20, max: 4000 },
+    ] },
     { id: "redpacket", label: "红包与榜单", icon: "gift", description: "控制积分红包额度和排行榜展示。", fields: [
-      { path: "red_packet_settings.enabled", label: "启用积分红包", hint: "允许管理员创建积分红包", type: "boolean" },
+      { path: "red_packet_settings.enabled", label: "启用积分红包", hint: "允许群成员消耗自己的积分创建红包", type: "boolean" },
       { path: "red_packet_settings.max_total_points", label: "单个红包积分上限", hint: "限制单次红包发放总额", type: "number", min: 1 },
       { path: "red_packet_settings.max_count", label: "单个红包份数上限", hint: "限制单次红包最大份数", type: "number", min: 1 },
       { path: "red_packet_settings.expire_minutes", label: "红包有效时间", hint: "分钟；填 0 表示不过期", type: "number", min: 0 },
@@ -850,11 +861,13 @@
       const display = Array.isArray(value) ? value.join("\n") : String(value ?? "");
       control = `<textarea data-setting-path="${escapeHtml(field.path)}" data-setting-type="${field.type}" rows="3">${escapeHtml(display)}</textarea>`;
     } else {
-      const type = field.type === "time" ? "time" : field.type === "number" ? "number" : "text";
+      const type = field.type === "time" ? "time" : field.type === "number" ? "number" : field.type === "password" ? "password" : "text";
       const min = field.min !== undefined ? ` min="${field.min}"` : "";
       const max = field.max !== undefined ? ` max="${field.max}"` : "";
       const step = field.step !== undefined ? ` step="${field.step}"` : "";
-      control = `<input type="${type}" data-setting-path="${escapeHtml(field.path)}" value="${escapeHtml(value ?? "")}"${min}${max}${step} />`;
+      const configured = field.configuredPath && Boolean(getPath(state.settingsDraft, field.configuredPath));
+      const placeholder = field.type === "password" ? ` placeholder="${configured ? "已配置；留空保持不变" : "输入 API Key（本地接口可留空）"}" autocomplete="new-password"` : "";
+      control = `<input type="${type}" data-setting-path="${escapeHtml(field.path)}" value="${escapeHtml(value ?? "")}"${min}${max}${step}${placeholder} />`;
     }
     return `<label class="setting-control ${field.full ? "full" : ""}"><span class="setting-copy"><b>${escapeHtml(field.label)}</b><small>${escapeHtml(field.hint)}</small></span><span class="setting-input">${control}</span></label>`;
   }

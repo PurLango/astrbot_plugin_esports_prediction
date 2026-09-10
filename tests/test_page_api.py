@@ -3,7 +3,9 @@ import asyncio
 import datetime
 import hashlib
 import unittest
+from unittest.mock import AsyncMock
 
+from astrbot.api.web import request
 from page_api import PointSystemPageApi
 
 
@@ -217,6 +219,47 @@ class PageApiTests(unittest.TestCase):
         self.assertEqual(error, "")
         self.assertEqual(
             validated["lottery_settings"]["group_distribution_ratios"], []
+        )
+
+    def test_image_api_key_is_not_exposed_by_the_operations_page(self):
+        self.plugin.config["image_generation_settings"] = {
+            "enabled": True,
+            "api_url": "https://image.example/v1",
+            "api_key": "top-secret",
+        }
+
+        settings = self.api._settings_view()["image_generation_settings"]
+
+        self.assertEqual(settings["api_key"], "")
+        self.assertTrue(settings["api_key_configured"])
+
+    def test_saving_other_image_settings_preserves_existing_api_key(self):
+        self.plugin.config["image_generation_settings"] = {
+            "enabled": True,
+            "api_url": "https://image.example/v1",
+            "api_key": "top-secret",
+        }
+        settings = self.api._settings_view()
+        settings["image_generation_settings"]["cost"] = 250
+        original_json = request.json
+        request.json = AsyncMock(
+            return_value={
+                "revision": self.api._config_revision(),
+                "settings": settings,
+            }
+        )
+        try:
+            response = asyncio.run(self.api.save_settings())
+        finally:
+            request.json = original_json
+
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(
+            self.plugin.config["image_generation_settings"]["api_key"],
+            "top-secret",
+        )
+        self.assertEqual(
+            self.plugin.config["image_generation_settings"]["cost"], 250
         )
 
 

@@ -76,6 +76,17 @@ SETTINGS_DEFAULTS: dict[str, Any] = {
         "max_count": 100,
         "expire_minutes": 1440,
     },
+    "image_generation_settings": {
+        "enabled": False,
+        "api_url": "",
+        "api_key": "",
+        "model": "gpt-image-1",
+        "cost": 100,
+        "daily_limit": 3,
+        "size": "1024x1024",
+        "timeout_seconds": 120,
+        "max_prompt_length": 800,
+    },
     "exchange_settings": {
         "title_enabled": True,
         "title_cost": 500,
@@ -123,6 +134,9 @@ SETTINGS_MINIMUMS = {
     "birthday_settings.reward_points": 0,
     "lottery_settings.group_required_participants": 2,
     "red_packet_settings.expire_minutes": 0,
+    "image_generation_settings.cost": 0,
+    "image_generation_settings.timeout_seconds": 10,
+    "image_generation_settings.max_prompt_length": 20,
 }
 
 SETTINGS_FLOAT_MAXIMUMS = {
@@ -232,12 +246,18 @@ class PointSystemPageApi:
         }
 
     def _settings_view(self) -> dict[str, Any]:
-        return {
+        settings = {
             key: self._merge_setting_defaults(
                 default, self.plugin.config.get(key, default)
             )
             for key, default in SETTINGS_DEFAULTS.items()
         }
+        image_settings = settings["image_generation_settings"]
+        image_settings["api_key_configured"] = bool(
+            str(image_settings.get("api_key", "") or "").strip()
+        )
+        image_settings["api_key"] = ""
+        return settings
 
     def _validate_setting_value(
         self, path: str, value: Any, default: Any
@@ -975,9 +995,30 @@ class PointSystemPageApi:
                         "data": {"revision": current_revision},
                     }
 
-                settings, error = self._validate_settings(payload.get("settings"))
+                raw_settings = payload.get("settings")
+                settings, error = self._validate_settings(raw_settings)
                 if error:
                     return {"status": "error", "message": error, "data": {}}
+
+                raw_image_settings = (
+                    raw_settings.get("image_generation_settings", {})
+                    if isinstance(raw_settings, dict)
+                    else {}
+                )
+                submitted_api_key = self._text(
+                    raw_image_settings.get("api_key"), 4000
+                )
+                current_image_settings = self.plugin.config.get(
+                    "image_generation_settings", {}
+                )
+                current_api_key = (
+                    self._text(current_image_settings.get("api_key"), 4000)
+                    if isinstance(current_image_settings, dict)
+                    else ""
+                )
+                settings["image_generation_settings"]["api_key"] = (
+                    submitted_api_key or current_api_key
+                )
 
                 config_snapshot = copy.deepcopy(dict(self.plugin.config))
                 async with self.plugin._data_lock:

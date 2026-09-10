@@ -24,14 +24,16 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 try:
     from .birthday_feature import BirthdayFeatureMixin
     from .esports_feature import EsportsPredictionMixin
+    from .image_generation_feature import ImageGenerationFeatureMixin
     from .lottery_feature import LotteryFeatureMixin
 except ImportError:
     from birthday_feature import BirthdayFeatureMixin
     from esports_feature import EsportsPredictionMixin
+    from image_generation_feature import ImageGenerationFeatureMixin
     from lottery_feature import LotteryFeatureMixin
 
 PLUGIN_NAME = "astrbot_plugin_point_system"
-DATA_VERSION = 15
+DATA_VERSION = 16
 POINT_SNAPSHOT_BUCKET_MINUTES = 15
 POINT_SNAPSHOT_RETENTION_DAYS = 90
 POINT_SNAPSHOT_MAX_RECORDS = 10000
@@ -94,6 +96,9 @@ REGISTERED_COMMAND_NAMES = (
     "抢红包",
     "领红包",
     "红包",
+    "转让积分",
+    "转让",
+    "生图",
     "抽奖",
     "今日赛事",
     "赛事列表",
@@ -121,11 +126,15 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "赛事积分竞猜是一个面向 AstrBot 群聊的电竞赛事竞猜与积分互动插件，支持多项目赛程同步、动态倍率、积分下注、自动结算，以及签到、抽奖和兑换等积分功能。",
-    "2.7.0",
+    "2.8.0",
     "https://github.com/PurLango/astrbot_plugin_esports_prediction",
 )
 class PointSystemPlugin(
-    BirthdayFeatureMixin, LotteryFeatureMixin, EsportsPredictionMixin, Star
+    BirthdayFeatureMixin,
+    LotteryFeatureMixin,
+    ImageGenerationFeatureMixin,
+    EsportsPredictionMixin,
+    Star,
 ):
     def __init__(self, context: Context, config: Dict[str, Any]):
         super().__init__(context)
@@ -950,6 +959,18 @@ class PointSystemPlugin(
                 raw.get("daily_active_point_times"), 0, 0
             ),
             "activity_points": self._normalize_int(raw.get("activity_points"), 0, 0),
+            "last_image_generation_date": self._normalize_text(
+                raw.get("last_image_generation_date")
+            ),
+            "daily_image_generation_times": self._normalize_int(
+                raw.get("daily_image_generation_times"), 0, 0
+            ),
+            "image_generation_count": self._normalize_int(
+                raw.get("image_generation_count"), 0, 0
+            ),
+            "image_generation_points_spent": self._normalize_int(
+                raw.get("image_generation_points_spent"), 0, 0
+            ),
             "last_personal_lottery_date": self._normalize_text(
                 raw.get("last_personal_lottery_date", raw.get("last_lottery_date"))
             ),
@@ -3060,6 +3081,12 @@ class PointSystemPlugin(
         async for result in LotteryFeatureMixin.lottery(self, event):
             yield result
 
+    @filter.command("生图")
+    async def image_generation_command(self, event: AstrMessageEvent):
+        """使用积分调用已配置的 AI 生图接口。"""
+        async for result in ImageGenerationFeatureMixin.image_generation(self, event):
+            yield result
+
     @filter.command("生日签到")
     async def birthday_sign_in_command(self, event: AstrMessageEvent):
         """桥接生日签到命令，避免框架遗漏注册 mixin 中的命令方法。"""
@@ -3310,7 +3337,14 @@ class PointSystemPlugin(
                 "发送 /兑换列表 查看价格和库存"
             )
         if self._get_red_packet_settings()["enabled"]:
-            lines.append("积分红包：管理员可发送固定、拼手气或口令红包，群成员发送 /抢红包 编号领取")
+            lines.append("积分红包：群成员可用自己的积分发送固定、拼手气或口令红包")
+        image_cfg = self._get_image_generation_settings()
+        if image_cfg["enabled"]:
+            lines.append(
+                f"AI 生图：/生图 提示词，每次 {image_cfg['cost']} {points_name}，"
+                f"每人每天最多 {image_cfg['daily_limit']} 次"
+            )
+        lines.append("积分转让：/转让 @用户 积分数量")
         negative_rule_no = 16 if exchange_items else 15
         lines.append(
             f"{negative_rule_no}. 负分规则：负分用户只能通过每日签到恢复积分，无法参与抽奖；"
@@ -3925,14 +3959,96 @@ class PointSystemPlugin(
         async for result in self._admin_modify_points(event, is_add=False):
             yield result
 
-    @filter.command("积分红包", alias={"发红包"})
-    async def create_red_packet(self, event: AstrMessageEvent):
-        """（积分管理员）创建固定、拼手气或口令红包。"""
-        permission_error = await self._ensure_points_admin(event)
-        if permission_error:
-            yield self._plain_result(event, permission_error)
+    @filter.command("转让", alias={"转让积分"})
+    async def transfer_points(self, event: AstrMessageEvent):
+        """将自己的积分转让给指定用户。用法：/转让 @用户 数量"""
+        points_name = self._get_points_name()
+        command_name = self._get_command_name(event)
+        target_uid, amount = self._parse_manual_points_args(event)
+        sender_id = self._normalize_user_id(event.get_sender_id())
+        bot_id = self._normalize_user_id(
+            getattr(event, "get_self_id", lambda: "")()
+        )
+
+        if amount is None or not target_uid:
+            yield self._plain_result(
+                event, f"用法：/{command_name} @用户 积分数量"
+            )
+            return
+        if amount <= 0:
+            yield self._plain_result(event, "转让数量必须是正整数。")
+            return
+        if target_uid in {sender_id, bot_id}:
+            yield self._plain_result(event, "不能把积分转让给自己或机器人。")
             return
 
+        transfer_error = ""
+        sender_remaining = 0
+        target_balance = 0
+        async with self._data_lock:
+            users = self.data.setdefault("users", {})
+            target_existed = target_uid in users
+            sender = self._get_user_record(sender_id)
+            target = self._get_user_record(target_uid)
+            self._touch_group_member(
+                event, sender_id, self._get_sender_display_name(event)
+            )
+            if sender["points"] < amount:
+                transfer_error = (
+                    f"积分不足，当前只有 {sender['points']} {points_name}。"
+                )
+            else:
+                sender_before = sender["points"]
+                target_before = target["points"]
+                sender["points"] -= amount
+                target["points"] += amount
+                sender_transaction = self._record_point_transaction_locked(
+                    sender_id,
+                    -amount,
+                    f"转让给 {target_uid}",
+                    balance=sender["points"],
+                )
+                target_transaction = self._record_point_transaction_locked(
+                    target_uid,
+                    amount,
+                    f"收到 {sender_id} 转让",
+                    balance=target["points"],
+                )
+                if not await self._save_data_locked():
+                    sender["points"] = sender_before
+                    target["points"] = target_before
+                    transactions = self.data.setdefault("point_transactions", [])
+                    for transaction in (sender_transaction, target_transaction):
+                        if transaction is not None and transaction in transactions:
+                            transactions.remove(transaction)
+                    if not target_existed:
+                        users.pop(target_uid, None)
+                    transfer_error = "积分转让记录保存失败，本次余额没有变动。"
+                else:
+                    sender_remaining = sender["points"]
+                    target_balance = target["points"]
+
+        if transfer_error:
+            yield self._plain_result(event, transfer_error)
+            return
+
+        await self._refresh_negative_titles_for_user(event, target_uid)
+        yield self._plain_result(
+            event,
+            "\n".join(
+                [
+                    "【积分转让成功】",
+                    f"接收用户：{target_uid}",
+                    f"转让数量：{amount} {points_name}",
+                    f"你的余额：{sender_remaining} {points_name}",
+                    f"对方余额：{target_balance} {points_name}",
+                ]
+            ),
+        )
+
+    @filter.command("积分红包", alias={"发红包"})
+    async def create_red_packet(self, event: AstrMessageEvent):
+        """使用自己的积分创建固定、拼手气或口令红包。"""
         settings = self._get_red_packet_settings()
         if not settings["enabled"]:
             yield self._plain_result(event, "积分红包功能当前未开启，请联系管理员调整配置。")
@@ -4027,56 +4143,82 @@ class PointSystemPlugin(
             ).isoformat(timespec="seconds")
 
         create_error = ""
+        sender_id = self._normalize_user_id(event.get_sender_id())
+        sender_remaining = 0
         async with self._data_lock:
             packets = self.data.setdefault("red_packets", [])
-            existing_ids = {
-                self._normalize_text(item.get("packet_id")).casefold()
-                for item in packets
-                if isinstance(item, dict)
-            }
-            for _ in range(5):
-                candidate = uuid.uuid4().hex[:8].casefold()
-                if candidate not in existing_ids:
-                    packet_id = candidate
-                    break
-            if not packet_id:
-                create_error = "暂时无法生成红包编号，请稍后再试。"
+            sender = self._get_user_record(sender_id)
+            self._touch_group_member(
+                event, sender_id, self._get_sender_display_name(event)
+            )
+            if sender["points"] < total_points:
+                create_error = (
+                    f"积分不足，发出这个红包需要 {total_points} {self._get_points_name()}，"
+                    f"当前只有 {sender['points']} {self._get_points_name()}。"
+                )
             else:
-                packet = {
-                    "packet_id": packet_id,
-                    "packet_type": packet_type,
-                    "total_points": total_points,
-                    "remaining_points": total_points,
-                    "total_count": count,
-                    "remaining_count": count,
-                    "unit_points": unit_points,
-                    "claimed_user_ids": [],
-                    "group_id": group_id,
-                    "sender_id": self._normalize_user_id(event.get_sender_id()),
-                    "password_hash": self._red_packet_password_hash(password)
-                    if packet_type == "password"
-                    else "",
-                    "created_at": now.isoformat(timespec="seconds"),
-                    "expires_at": expires_at,
-                    "reset_generation": self._normalize_int(
-                        self.data.get("reset_generation"), 0, minimum=0
-                    ),
+                existing_ids = {
+                    self._normalize_text(item.get("packet_id")).casefold()
+                    for item in packets
+                    if isinstance(item, dict)
                 }
-                packets.append(packet)
-                if not await self._save_data_locked():
-                    packets.pop()
-                    create_error = "红包保存失败，本次没有发出积分，请稍后再试。"
+                for _ in range(5):
+                    candidate = uuid.uuid4().hex[:8].casefold()
+                    if candidate not in existing_ids:
+                        packet_id = candidate
+                        break
+                if not packet_id:
+                    create_error = "暂时无法生成红包编号，请稍后再试。"
+                else:
+                    packet = {
+                        "packet_id": packet_id,
+                        "packet_type": packet_type,
+                        "total_points": total_points,
+                        "remaining_points": total_points,
+                        "total_count": count,
+                        "remaining_count": count,
+                        "unit_points": unit_points,
+                        "claimed_user_ids": [],
+                        "group_id": group_id,
+                        "sender_id": sender_id,
+                        "password_hash": self._red_packet_password_hash(password)
+                        if packet_type == "password"
+                        else "",
+                        "created_at": now.isoformat(timespec="seconds"),
+                        "expires_at": expires_at,
+                        "reset_generation": self._normalize_int(
+                            self.data.get("reset_generation"), 0, minimum=0
+                        ),
+                    }
+                    sender_before = sender["points"]
+                    sender["points"] -= total_points
+                    transaction = self._record_point_transaction_locked(
+                        sender_id,
+                        -total_points,
+                        "发出积分红包",
+                        balance=sender["points"],
+                    )
+                    packets.append(packet)
+                    if not await self._save_data_locked():
+                        packets.pop()
+                        sender["points"] = sender_before
+                        transactions = self.data.setdefault(
+                            "point_transactions", []
+                        )
+                        if transaction is not None and transaction in transactions:
+                            transactions.remove(transaction)
+                        create_error = "红包保存失败，本次没有扣除积分。"
+                    else:
+                        sender_remaining = sender["points"]
 
         if create_error:
             yield self._plain_result(event, create_error)
             return
 
-        log_operations, _ = self._get_admin_settings()
-        if log_operations:
-            logger.info(
-                f"管理员 {event.get_sender_id()} 创建积分红包: packet={packet_id}, "
-                f"type={packet_type}, total={total_points}, count={count}, group={group_id}"
-            )
+        logger.info(
+            f"用户 {sender_id} 创建积分红包: packet={packet_id}, "
+            f"type={packet_type}, total={total_points}, count={count}, group={group_id}"
+        )
 
         type_text = {
             "fixed": f"每份 {unit_points} {self._get_points_name()}",
@@ -4090,8 +4232,17 @@ class PointSystemPlugin(
         )
         yield self._plain_result(
             event,
-            f"积分红包已发出，编号 {packet_id.upper()}，{type_text}，共 {count} 份。"
-            + claim_hint,
+            "\n".join(
+                [
+                    "【积分红包已发出】",
+                    f"编号：{packet_id.upper()}",
+                    f"类型：{type_text}",
+                    f"份数：{count}",
+                    f"消耗：{total_points} {self._get_points_name()}",
+                    f"余额：{sender_remaining} {self._get_points_name()}",
+                    claim_hint,
+                ]
+            ),
         )
 
     @filter.command("抢红包", alias={"领红包", "红包"})

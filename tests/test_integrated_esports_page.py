@@ -54,6 +54,14 @@ class IntegratedEsportsPageTests(unittest.TestCase):
         self.assertIn("lottery_settings.group_distribution_ratios", script)
         self.assertIn("完全随机", script)
 
+    def test_operations_console_contains_image_generation_settings(self):
+        script = (ROOT / "pages" / "兑换管理" / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("image_generation_settings.api_url", script)
+        self.assertIn("image_generation_settings.api_key", script)
+        self.assertIn("image_generation_settings.daily_limit", script)
+
 
 if __name__ == "__main__":
     unittest.main()

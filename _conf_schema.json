@@ -554,6 +554,88 @@
       }
     }
   },
+  "red_packet_settings": {
+    "description": "积分红包设置",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用积分红包",
+        "type": "bool",
+        "hint": "开启后，群成员可以消耗自己的积分发送红包。",
+        "default": true
+      },
+      "max_total_points": {
+        "description": "单个红包积分上限",
+        "type": "int",
+        "default": 100000
+      },
+      "max_count": {
+        "description": "单个红包份数上限",
+        "type": "int",
+        "default": 100
+      },
+      "expire_minutes": {
+        "description": "红包有效时间（分钟）",
+        "type": "int",
+        "hint": "填写 0 表示不过期。",
+        "default": 1440
+      }
+    }
+  },
+  "image_generation_settings": {
+    "description": "AI 生图设置",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用 AI 生图",
+        "type": "bool",
+        "default": false
+      },
+      "api_url": {
+        "description": "生图 API 地址",
+        "type": "string",
+        "hint": "填写 OpenAI 兼容的 images/generations 地址；填写到 /v1 时会自动补全。",
+        "default": ""
+      },
+      "api_key": {
+        "description": "生图 API Key",
+        "type": "string",
+        "hint": "仅保存在 AstrBot 本地配置中。使用无需密钥的本地接口时可以留空。",
+        "default": ""
+      },
+      "model": {
+        "description": "生图模型",
+        "type": "string",
+        "default": "gpt-image-1"
+      },
+      "cost": {
+        "description": "每次生图消耗积分",
+        "type": "int",
+        "default": 100
+      },
+      "daily_limit": {
+        "description": "每人每日生图次数上限",
+        "type": "int",
+        "default": 3
+      },
+      "size": {
+        "description": "图片尺寸",
+        "type": "string",
+        "hint": "例如 1024x1024；留空则由接口自行决定。",
+        "default": "1024x1024"
+      },
+      "timeout_seconds": {
+        "description": "生图超时时间（秒）",
+        "type": "int",
+        "default": 120
+      },
+      "max_prompt_length": {
+        "description": "提示词最大长度",
+        "type": "int",
+        "default": 800
+      }
+    }
+  },
   "message_templates": {
     "description": "自定义回复消息模板",
     "type": "object",
