@@ -126,7 +126,7 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "赛事积分竞猜是一个面向 AstrBot 群聊的电竞赛事竞猜与积分互动插件，支持多项目赛程同步、动态倍率、积分下注、自动结算，以及签到、抽奖和兑换等积分功能。",
-    "2.8.0",
+    "2.8.1",
     "https://github.com/PurLango/astrbot_plugin_esports_prediction",
 )
 class PointSystemPlugin(
@@ -1767,10 +1767,11 @@ class PointSystemPlugin(
         return "\n".join(
             [
                 "【积分红包用法】",
-                "固定：/积分红包 固定 每份积分 份数",
-                "拼手气：/积分红包 拼手气 总积分 份数",
-                "口令：/积分红包 口令 总积分 份数 口令",
-                "领取：/抢红包 编号 [口令]",
+                "固定：/发红包 固定 每份积分 份数",
+                "拼手气：/发红包 拼手气 总积分 份数",
+                "口令：/发红包 口令 总积分 份数 领取口令",
+                "示例：/发红包 口令 100 5 开门大吉",
+                "领取：/抢红包 [编号] [领取口令]",
             ]
         )
 
@@ -2279,6 +2280,35 @@ class PointSystemPlugin(
                         continue
                     return normalized_target
         return None
+
+    def _parse_title_exchange_args(
+        self, event: AstrMessageEvent
+    ) -> tuple[str, str]:
+        sender_id = self._normalize_user_id(event.get_sender_id())
+        mentioned_user_id = self._extract_target_user_id(event)
+        raw_title = self._get_command_args(event)
+
+        if mentioned_user_id:
+            plain_text = "".join(
+                self._normalize_text(getattr(segment, "text", ""))
+                for segment in self._get_message_segments(event)
+                if isinstance(segment, Plain)
+            ).strip()
+            plain_command, plain_args = self._split_command_text(plain_text)
+            if plain_command == "兑换头衔":
+                raw_title = plain_args
+            elif plain_text and not plain_text.startswith(("@", "<@", "[CQ:at")):
+                raw_title = plain_text
+            else:
+                raw_title = re.sub(
+                    r"^\s*(?:\[CQ:at,[^\]]+\]|<@!?[^>]+>|@\S+)\s*",
+                    "",
+                    raw_title,
+                    count=1,
+                )
+
+        target_user_id = mentioned_user_id or sender_id
+        return target_user_id, " ".join(raw_title.split())
 
     def _extract_reply_message_id(self, event: AstrMessageEvent) -> int | None:
         for component in self._get_message_segments(event):
@@ -3511,7 +3541,7 @@ class PointSystemPlugin(
 
     @filter.command("兑换头衔")
     async def exchange_title(self, event: AstrMessageEvent):
-        """消耗积分兑换自己的群头衔。用法：/兑换头衔 头衔内容"""
+        """消耗自己的积分，为自己或指定用户兑换群头衔。"""
         exchange_cfg = self._get_exchange_settings()
         points_name = self._get_points_name()
 
@@ -3524,9 +3554,13 @@ class PointSystemPlugin(
             yield self._plain_result(event, err)
             return
 
-        raw_title = " ".join(self._get_command_args(event).split())
+        target_user_id, raw_title = self._parse_title_exchange_args(event)
         if not raw_title:
-            yield self._plain_result(event, "用法：/兑换头衔 头衔内容")
+            yield self._plain_result(
+                event,
+                "用法：/兑换头衔 头衔内容\n"
+                "给他人：/兑换头衔 @用户 头衔内容",
+            )
             return
 
         if len(raw_title) > exchange_cfg["title_max_length"]:
@@ -3548,7 +3582,7 @@ class PointSystemPlugin(
         try:
             await event.bot.set_group_special_title(
                 group_id=int(event.get_group_id()),
-                user_id=int(event.get_sender_id()),
+                user_id=int(target_user_id),
                 special_title=raw_title,
                 duration=-1,
             )
@@ -3563,8 +3597,10 @@ class PointSystemPlugin(
             )
             return
 
+        sender_id = self._normalize_user_id(event.get_sender_id())
+        target_label = "您的" if target_user_id == sender_id else "指定用户的"
         yield self._plain_result(event,
-            f"兑换成功，已将您的群头衔设置为【{raw_title}】。"
+            f"兑换成功，已将{target_label}群头衔设置为【{raw_title}】。"
             f"消耗 {exchange_cfg['title_cost']} {points_name}，剩余 {remaining_points} {points_name}。"
         )
 
@@ -4102,7 +4138,7 @@ class PointSystemPlugin(
             if not password:
                 yield self._plain_result(
                     event,
-                    "口令红包还需要填写口令，例如：/积分红包 口令 100 5 春日快乐。",
+                    "口令红包还需要填写领取口令，例如：/发红包 口令 100 5 春日快乐。",
                 )
                 return
             if len(password) > 80:

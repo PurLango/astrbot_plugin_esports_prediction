@@ -6,7 +6,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from astrbot.api.message_components import At
+from astrbot.api.message_components import At, Plain
+from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
+    AiocqhttpMessageEvent,
+)
 
 from image_generation_feature import ImageGenerationError
 from main import PointSystemPlugin, REGISTERED_COMMAND_NAMES
@@ -47,11 +50,15 @@ class FakeEvent:
         return chain
 
 
-def build_plugin(*, points=100, config=None, save_result=True):
+class FakeTitleEvent(FakeEvent, AiocqhttpMessageEvent):
+    pass
+
+
+def build_plugin(*, points=100, config=None, save_result=True, user_id="sender"):
     plugin = object.__new__(PointSystemPlugin)
     plugin.config = {"points_name": "积分", **(config or {})}
     plugin.data = plugin._new_store()
-    plugin.data["users"]["sender"] = plugin._normalize_user_record(
+    plugin.data["users"][user_id] = plugin._normalize_user_record(
         {"points": points}
     )
     plugin._data_lock = asyncio.Lock()
@@ -65,6 +72,56 @@ def build_plugin(*, points=100, config=None, save_result=True):
 
 
 class SocialPointFeatureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_title_exchange_can_target_mentioned_member(self):
+        plugin = build_plugin(
+            points=100,
+            user_id="10001",
+            config={"exchange_settings": {"title_cost": 30}},
+        )
+        target = At()
+        target.qq = "20002"
+        event = FakeTitleEvent(
+            "/兑换头衔 @目标 荣耀王者",
+            user_id="10001",
+            group_id="30003",
+            message=[Plain("/兑换头衔 "), target, Plain(" 荣耀王者")],
+        )
+        event.bot = SimpleNamespace(set_group_special_title=AsyncMock())
+
+        reply = await anext(plugin.exchange_title(event))
+
+        event.bot.set_group_special_title.assert_awaited_once_with(
+            group_id=30003,
+            user_id=20002,
+            special_title="荣耀王者",
+            duration=-1,
+        )
+        self.assertEqual(plugin.data["users"]["10001"]["points"], 70)
+        self.assertIn("指定用户的群头衔", reply)
+
+    async def test_title_exchange_without_mention_still_targets_sender(self):
+        plugin = build_plugin(
+            points=100,
+            user_id="10001",
+            config={"exchange_settings": {"title_cost": 30}},
+        )
+        event = FakeTitleEvent(
+            "/兑换头衔 荣耀王者",
+            user_id="10001",
+            group_id="30003",
+        )
+        event.bot = SimpleNamespace(set_group_special_title=AsyncMock())
+
+        reply = await anext(plugin.exchange_title(event))
+
+        event.bot.set_group_special_title.assert_awaited_once_with(
+            group_id=30003,
+            user_id=10001,
+            special_title="荣耀王者",
+            duration=-1,
+        )
+        self.assertIn("您的群头衔", reply)
+
     async def test_transfer_moves_points_atomically_and_records_both_sides(self):
         plugin = build_plugin(points=100)
         target = At()
