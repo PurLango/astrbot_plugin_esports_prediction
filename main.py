@@ -126,7 +126,7 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "赛事积分竞猜是一个面向 AstrBot 群聊的电竞赛事竞猜与积分互动插件，支持多项目赛程同步、动态倍率、积分下注、自动结算，以及签到、抽奖和兑换等积分功能。",
-    "2.8.1",
+    "2.8.2",
     "https://github.com/PurLango/astrbot_plugin_esports_prediction",
 )
 class PointSystemPlugin(
@@ -146,6 +146,7 @@ class PointSystemPlugin(
         self._birthday_broadcast_stop_event = asyncio.Event()
         self._esports_sync_task: asyncio.Task | None = None
         self._esports_stop_event = asyncio.Event()
+        self._active_image_generation_users: set[str] = set()
         self.page_api = None
         self.esports_page_api = None
 
@@ -3114,8 +3115,23 @@ class PointSystemPlugin(
     @filter.command("生图")
     async def image_generation_command(self, event: AstrMessageEvent):
         """使用积分调用已配置的 AI 生图接口。"""
-        async for result in ImageGenerationFeatureMixin.image_generation(self, event):
-            yield result
+        user_id = self._normalize_user_id(event.get_sender_id())
+        active_users = self._active_image_generation_users
+        if user_id in active_users:
+            yield self._plain_result(
+                event,
+                "你已有一个生图请求正在处理中，请等待完成或超时后再试。",
+            )
+            return
+
+        active_users.add(user_id)
+        try:
+            async for result in ImageGenerationFeatureMixin.image_generation(
+                self, event
+            ):
+                yield result
+        finally:
+            active_users.discard(user_id)
 
     @filter.command("生日签到")
     async def birthday_sign_in_command(self, event: AstrMessageEvent):

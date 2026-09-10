@@ -62,6 +62,7 @@ def build_plugin(*, points=100, config=None, save_result=True, user_id="sender")
         {"points": points}
     )
     plugin._data_lock = asyncio.Lock()
+    plugin._active_image_generation_users = set()
 
     async def save_data():
         return save_result
@@ -275,6 +276,45 @@ class ImageGenerationFeatureTests(unittest.IsolatedAsyncioTestCase):
             [item["delta"] for item in plugin.data["point_transactions"]],
             [-40, 40],
         )
+
+    async def test_same_user_cannot_start_two_generations_at_once(self):
+        plugin = build_plugin(
+            points=120,
+            config={
+                "image_generation_settings": self.image_config(daily_limit=3)
+            },
+        )
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_generation(_settings, _prompt):
+            started.set()
+            await release.wait()
+            return {"kind": "url", "value": "https://image.example/a.png"}
+
+        plugin._request_image_generation = AsyncMock(side_effect=slow_generation)
+
+        async def collect(message):
+            return [
+                result
+                async for result in plugin.image_generation_command(
+                    FakeEvent(message)
+                )
+            ]
+
+        first_task = asyncio.create_task(collect("/生图 星空"))
+        await started.wait()
+
+        duplicate = await collect("/生图 星空")
+        self.assertIn("已有一个生图请求正在处理中", duplicate[0])
+        self.assertEqual(plugin.data["users"]["sender"]["points"], 80)
+
+        release.set()
+        await first_task
+        await collect("/生图 海洋")
+
+        self.assertEqual(plugin._request_image_generation.await_count, 2)
+        self.assertEqual(plugin.data["users"]["sender"]["points"], 40)
 
     async def test_image_api_result_supports_url_and_base64(self):
         plugin = build_plugin()
