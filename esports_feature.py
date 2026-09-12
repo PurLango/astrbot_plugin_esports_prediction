@@ -900,9 +900,9 @@ class EsportsPredictionMixin:
         if start is None:
             return None, None
         settings = self._get_esports_settings()
-        switch_deadline = start - datetime.timedelta(minutes=settings["switch_deadline_minutes"])
+        cancel_deadline = start - datetime.timedelta(minutes=settings["switch_deadline_minutes"])
         close_deadline = start - datetime.timedelta(minutes=settings["close_before_minutes"])
-        return switch_deadline, close_deadline
+        return cancel_deadline, close_deadline
 
     def _match_pool_locked(self, match_id: str) -> Dict[str, int]:
         pool: Dict[str, int] = {}
@@ -1414,19 +1414,29 @@ class EsportsPredictionMixin:
         return aliases.get(normalized)
 
     def _esports_help_message(self) -> str:
+        settings = self._get_esports_settings()
+        points_name = self._get_points_name()
         return "\n".join(
             [
                 "【赛事竞猜使用方法】",
                 "",
                 "查看比赛：/今日赛事 [撸/瓦/CS/农]",
                 "参与竞猜：/竞猜 L001 TES 100",
+                "同等写法：/赛事竞猜 L001 TES 100",
                 "追加同队：再次输入相同竞猜指令",
-                "改选队伍：/改选 L001 BLG",
                 "撤销竞猜：/撤销竞猜 L001",
+                "竞猜详情：/竞猜详情 [赛事编号]",
                 "查看记录：/我的竞猜",
                 "最近赛果：/比赛结果",
                 "查看排行：/竞猜排行",
-                "查看规则：/竞猜规则",
+                "",
+                "【竞猜规则】",
+                f"下注范围：每场 {settings['min_bet']}～{settings['max_bet']} {points_name}",
+                "追加：只能对已选队伍继续追加",
+                f"撤单：开赛前 {settings['switch_deadline_minutes']} 分钟截止",
+                f"封盘：开赛前 {settings['close_before_minutes']} 分钟",
+                "异常比赛：全部退款",
+                "倍率：根据近期赛果的 Elo 实力评分估算，首笔下注后锁定",
                 "",
                 "【积分相关】",
                 "签到：/签到",
@@ -1436,9 +1446,6 @@ class EsportsPredictionMixin:
                 "积分规则：/积分规则",
             ]
         )
-
-    async def esports_help(self, event: AstrMessageEvent):
-        yield event.plain_result(self._esports_help_message())
 
     async def esports_matches(self, event: AstrMessageEvent):
         settings = self._get_esports_settings()
@@ -1492,6 +1499,177 @@ class EsportsPredictionMixin:
         )
         yield event.plain_result(message)
 
+    def _match_bets_for_group_locked(
+        self,
+        match_id: str,
+        group_id: str = "",
+        *,
+        pending_only: bool = False,
+    ) -> list[Dict[str, Any]]:
+        member_ids: set[str] = set()
+        if group_id:
+            group = self.data.get("groups", {}).get(group_id, {})
+            members = group.get("members", {}) if isinstance(group, dict) else {}
+            if isinstance(members, dict):
+                member_ids = {str(user_id) for user_id in members}
+
+        result = []
+        for bet in self._get_esports_store().setdefault("bets", {}).values():
+            if not isinstance(bet, dict) or bet.get("match_id") != match_id:
+                continue
+            status = str(bet.get("status", "") or "").lower()
+            if pending_only and status != "pending":
+                continue
+            if not pending_only and status == "withdrawn":
+                continue
+            user_id = str(bet.get("user_id", "") or "")
+            if (
+                group_id
+                and user_id not in member_ids
+                and str(bet.get("source_group_id", "") or "") != group_id
+            ):
+                continue
+            result.append(bet)
+        return sorted(
+            result,
+            key=lambda bet: (
+                -self._normalize_int(bet.get("amount"), 0, 0),
+                str(bet.get("placed_at", "") or ""),
+            ),
+        )
+
+    def _format_match_bet_detail_locked(
+        self,
+        match: Dict[str, Any],
+        bets: list[Dict[str, Any]],
+        group_id: str,
+    ) -> str:
+        teams = match.get("teams", [])
+        if not isinstance(teams, list) or len(teams) != 2:
+            return "比赛队伍数据不完整。"
+        odds = match.get("odds", {})
+        if not isinstance(odds, dict):
+            odds = {}
+        first_name = self._team_display_name(teams[0])
+        second_name = self._team_display_name(teams[1])
+        first_odds = self._normalize_float(odds.get(teams[0].get("id")), 1.0, 0.0)
+        second_odds = self._normalize_float(odds.get(teams[1].get("id")), 1.0, 0.0)
+        game_label = ESPORTS_GAME_LABELS.get(
+            str(match.get("game", "")).lower(), "电竞"
+        )
+        total_points = sum(
+            self._normalize_int(bet.get("amount"), 0, 0) for bet in bets
+        )
+        lines = [
+            f"【竞猜详情｜{match.get('display_id', '?')}｜{game_label}】",
+            f"时间：{self._format_esports_time(match.get('start_time'))}",
+            f"赛事：{match.get('competition') or '待定'}",
+            f"队伍：{first_name} vs {second_name}",
+            f"赔率：{first_name} {first_odds:.2f}｜{second_name} {second_odds:.2f}",
+            "",
+            f"【群内下注｜{len(bets)} 人｜{total_points} {self._get_points_name()}】",
+        ]
+        if not bets:
+            lines.append("暂无群成员下注。")
+            return "\n".join(lines)
+
+        status_names = {
+            "pending": "待结算",
+            "won": "命中",
+            "lost": "未命中",
+            "refunded": "已退款",
+        }
+        team_names = {
+            str(team.get("id", "")): self._team_display_name(team)
+            for team in teams
+            if isinstance(team, dict)
+        }
+        for index, bet in enumerate(bets, start=1):
+            user_id = str(bet.get("user_id", "") or "")
+            team_name = team_names.get(
+                str(bet.get("team_id", "") or ""),
+                str(bet.get("team_name", "") or "未知队伍"),
+            )
+            lines.append(
+                f"{index}. {self._esports_user_name(user_id, group_id)}｜{team_name}｜"
+                f"{self._normalize_int(bet.get('amount'), 0, 0)} {self._get_points_name()}｜"
+                f"{self._normalize_float(bet.get('odds'), 1.0, 0.0):.2f}｜"
+                f"{status_names.get(str(bet.get('status', '')), str(bet.get('status', '未知')))}"
+            )
+        return "\n".join(lines)
+
+    async def esports_bet_detail(self, event: AstrMessageEvent):
+        match_token = self._get_command_args(event).strip()
+        group_id = self._get_group_id(event)
+        async with self._data_lock:
+            if match_token:
+                match = self._resolve_match_locked(match_token)
+                if not match or not match.get("visible", True):
+                    message = "未找到该比赛，请先用 /今日赛事 查看编号。"
+                else:
+                    bets = self._match_bets_for_group_locked(match["id"], group_id)
+                    message = self._format_match_bet_detail_locked(
+                        match, bets, group_id
+                    )
+            else:
+                ranked = []
+                for match in self._visible_upcoming_matches_locked():
+                    bets = self._match_bets_for_group_locked(
+                        match["id"], pending_only=True
+                    )
+                    if not bets:
+                        continue
+                    ranked.append(
+                        (
+                            len(bets),
+                            sum(
+                                self._normalize_int(bet.get("amount"), 0, 0)
+                                for bet in bets
+                            ),
+                            match,
+                        )
+                    )
+                ranked.sort(
+                    key=lambda item: (
+                        -item[0],
+                        -item[1],
+                        self._parse_esports_datetime(item[2].get("start_time"))
+                        or datetime.datetime.max.replace(
+                            tzinfo=datetime.timezone.utc
+                        ),
+                    )
+                )
+                selected = ranked[:5]
+                if not selected:
+                    message = "【热门竞猜】\n当前没有已下注且仍可竞猜的比赛。"
+                else:
+                    lines = ["【当前下注人数最多的比赛】"]
+                    for index, (bettor_count, total_points, match) in enumerate(
+                        selected, start=1
+                    ):
+                        teams = match.get("teams", [])
+                        matchup = (
+                            f"{self._team_display_name(teams[0])} vs "
+                            f"{self._team_display_name(teams[1])}"
+                            if isinstance(teams, list) and len(teams) == 2
+                            else "队伍待定"
+                        )
+                        game_label = ESPORTS_GAME_LABELS.get(
+                            str(match.get("game", "")).lower(), "电竞"
+                        )
+                        lines.extend(
+                            [
+                                f"{index}. {match.get('display_id', '?')}｜{game_label}｜{matchup}",
+                                f"   {self._format_esports_time(match.get('start_time'))}｜"
+                                f"{bettor_count} 人｜{total_points} {self._get_points_name()}",
+                            ]
+                        )
+                    lines.extend(
+                        ["", "查看明细：/竞猜详情 赛事编号"]
+                    )
+                    message = "\n".join(lines)
+        yield self._plain_result(event, message)
+
     async def esports_bet(self, event: AstrMessageEvent):
         args = self._get_command_args(event).split()
         if len(args) < 3:
@@ -1529,7 +1707,7 @@ class EsportsPredictionMixin:
                     key = self._bet_key(match["id"], user_id)
                     existing = bets.get(key)
                     if isinstance(existing, dict) and existing.get("status") == "pending" and existing.get("team_id") != team["id"]:
-                        message = "你已经选择了另一支队伍；需要改选时请使用 /改选 比赛编号 队伍。"
+                        message = "你已经选择了另一支队伍；如需更换，请先撤销本场竞猜再重新下注。"
                     else:
                         current_amount = (
                             self._normalize_int(existing.get("amount"), 0, 0)
@@ -1583,45 +1761,6 @@ class EsportsPredictionMixin:
                             )
         yield self._plain_result(event, message)
 
-    async def esports_switch_bet(self, event: AstrMessageEvent):
-        args = self._get_command_args(event).split(maxsplit=1)
-        if len(args) < 2:
-            yield self._plain_result(event, "用法：/改选 比赛编号 战队缩写")
-            return
-        user_id = str(event.get_sender_id())
-        async with self._data_lock:
-            match = self._resolve_match_locked(args[0])
-            team = self._resolve_match_team(match, args[1]) if match else None
-            bet = (
-                self._get_esports_store().setdefault("bets", {}).get(self._bet_key(match["id"], user_id))
-                if match
-                else None
-            )
-            switch_deadline, _ = self._match_deadlines(match) if match else (None, None)
-            if not match or not team:
-                message = "未找到比赛或队伍。"
-            elif not isinstance(bet, dict) or bet.get("status") != "pending":
-                message = "你在该场比赛没有可改选的下注。"
-            elif match.get("status") not in OPEN_MATCH_STATUSES:
-                message = "该比赛已经封盘，不能继续改选。"
-            elif switch_deadline is None or self._utcnow() >= switch_deadline:
-                message = "该比赛已超过改选截止时间。"
-            elif bet.get("team_id") == team["id"]:
-                message = "你当前已经选择这支队伍。"
-            else:
-                now = self._utcnow().isoformat(timespec="seconds")
-                team_name = self._team_display_name(team)
-                bet["team_id"] = team["id"]
-                bet["team_name"] = team_name
-                bet["odds"] = float(match.get("odds", {}).get(team["id"], 1.0))
-                bet["possible_payout"] = int(math.floor(bet["amount"] * bet["odds"]))
-                bet["updated_at"] = now
-                bet.setdefault("history", []).append({"action": "switch", "team_id": team["id"], "at": now})
-                bet["history"] = bet["history"][-30:]
-                await self._save_data_locked()
-                message = f"已改选为 {team_name}，本金 {bet['amount']}，倍率 {bet['odds']:.2f}。"
-        yield self._plain_result(event, message)
-
     async def esports_cancel_bet(self, event: AstrMessageEvent):
         token = self._get_command_args(event).strip()
         user_id = str(event.get_sender_id())
@@ -1632,12 +1771,12 @@ class EsportsPredictionMixin:
                 if match
                 else None
             )
-            switch_deadline, _ = self._match_deadlines(match) if match else (None, None)
+            cancel_deadline, _ = self._match_deadlines(match) if match else (None, None)
             if not match or not isinstance(bet, dict) or bet.get("status") != "pending":
                 message = "未找到可撤销的下注。"
             elif match.get("status") not in OPEN_MATCH_STATUSES:
                 message = "该比赛已经封盘，不能撤单。"
-            elif switch_deadline is None or self._utcnow() >= switch_deadline:
+            elif cancel_deadline is None or self._utcnow() >= cancel_deadline:
                 message = "该比赛已超过撤单截止时间。"
             else:
                 amount = self._normalize_int(bet.get("amount"), 0, 0)
@@ -1815,22 +1954,6 @@ class EsportsPredictionMixin:
             sections.append("\n命中率\n" + ("\n".join(f"{i}. {self._esports_user_name(uid)}｜{row['wins'] / row['settled']:.1%}（{row['settled']} 场）" for i, (uid, row) in enumerate(hit_rank, 1)) or f"暂无（至少 {settings['hit_rate_min_bets']} 场）"))
             sections.append("\n总返还\n" + ("\n".join(f"{i}. {self._esports_user_name(uid)}｜{row['payout']}" for i, (uid, row) in enumerate(payout_rank, 1)) or "暂无"))
         yield self._plain_result(event, "\n".join(sections))
-
-    async def esports_rules(self, event: AstrMessageEvent):
-        settings = self._get_esports_settings()
-        points_name = self._get_points_name()
-        message = "\n".join(
-            [
-                "【竞猜规则】",
-                f"下注范围：每场 {settings['min_bet']}～{settings['max_bet']} {points_name}",
-                "追加：可对同一队继续下注",
-                f"改选/撤单：开赛前 {settings['switch_deadline_minutes']} 分钟截止",
-                f"封盘：开赛前 {settings['close_before_minutes']} 分钟",
-                "异常比赛：全部退款",
-                "倍率：根据近期赛果的 Elo 实力评分估算，首笔下注后锁定",
-            ]
-        )
-        yield self._plain_result(event, message)
 
     def _manual_team_id(self, game: str, name: str) -> str:
         slug = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "-", name.casefold()).strip("-")

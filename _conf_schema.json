@@ -716,7 +716,7 @@
         "default": 10000
       },
       "switch_deadline_minutes": {
-        "description": "开赛前停止改选与撤单（分钟）",
+        "description": "开赛前停止撤单（分钟）",
         "type": "int",
         "default": 60
       },

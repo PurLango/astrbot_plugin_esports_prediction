@@ -105,7 +105,7 @@ REGISTERED_COMMAND_NAMES = (
     "热门赛事",
     "赛事竞猜",
     "竞猜",
-    "改选",
+    "竞猜详情",
     "撤销竞猜",
     "撤单",
     "我的竞猜",
@@ -126,7 +126,7 @@ REGISTERED_COMMAND_NAMES_BY_LENGTH = tuple(
     PLUGIN_NAME,
     "menglimi",
     "赛事积分竞猜是一个面向 AstrBot 群聊的电竞赛事竞猜与积分互动插件，支持多项目赛程同步、动态倍率、积分下注、自动结算，以及签到、抽奖和兑换等积分功能。",
-    "2.8.2",
+    "2.9.0",
     "https://github.com/PurLango/astrbot_plugin_esports_prediction",
 )
 class PointSystemPlugin(
@@ -3151,22 +3151,16 @@ class PointSystemPlugin(
         async for result in EsportsPredictionMixin.esports_matches(self, event):
             yield result
 
-    @filter.command("赛事竞猜")
-    async def esports_help_command(self, event: AstrMessageEvent):
-        """查看赛事竞猜的使用方法。"""
-        async for result in EsportsPredictionMixin.esports_help(self, event):
-            yield result
-
-    @filter.command("竞猜")
+    @filter.command("竞猜", alias={"赛事竞猜", "竞猜规则"})
     async def esports_bet_command(self, event: AstrMessageEvent):
-        """使用积分竞猜一场比赛的胜者。"""
+        """使用积分竞猜比赛胜者；不带参数时显示说明与规则。"""
         async for result in EsportsPredictionMixin.esports_bet(self, event):
             yield result
 
-    @filter.command("改选")
-    async def esports_switch_bet_command(self, event: AstrMessageEvent):
-        """在改选截止前更换所选队伍。"""
-        async for result in EsportsPredictionMixin.esports_switch_bet(self, event):
+    @filter.command("竞猜详情")
+    async def esports_bet_detail_command(self, event: AstrMessageEvent):
+        """查看指定比赛的群内下注，或当前下注人数最多的比赛。"""
+        async for result in EsportsPredictionMixin.esports_bet_detail(self, event):
             yield result
 
     @filter.command("撤销竞猜", alias={"撤单"})
@@ -3191,12 +3185,6 @@ class PointSystemPlugin(
     async def esports_leaderboard_command(self, event: AstrMessageEvent):
         """查看盈利、命中率与总返还排行榜。"""
         async for result in EsportsPredictionMixin.esports_leaderboard(self, event):
-            yield result
-
-    @filter.command("竞猜规则")
-    async def esports_rules_command(self, event: AstrMessageEvent):
-        """查看电竞竞猜规则。"""
-        async for result in EsportsPredictionMixin.esports_rules(self, event):
             yield result
 
     @filter.command("竞猜管理")

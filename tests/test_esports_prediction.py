@@ -13,17 +13,24 @@ from esports_provider import PandaScoreProvider
 
 
 class FakeEvent:
-    def __init__(self, message, group_id="100", user_id="123"):
+    def __init__(
+        self,
+        message,
+        group_id="100",
+        user_id="123",
+        sender_name="测试用户",
+    ):
         self.message_str = message
         self.message_obj = SimpleNamespace(message=[])
         self._group_id = group_id
         self._user_id = user_id
+        self._sender_name = sender_name
 
     def get_sender_id(self):
         return self._user_id
 
     def get_sender_name(self):
-        return "测试用户"
+        return self._sender_name
 
     def get_group_id(self):
         return self._group_id
@@ -75,17 +82,44 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("赛事竞猜使用方法", reply)
         self.assertIn("/今日赛事 [撸/瓦/CS/农]", reply)
         self.assertIn("/竞猜 L001 TES 100", reply)
-        self.assertIn("/改选 L001 BLG", reply)
+        self.assertIn("/赛事竞猜 L001 TES 100", reply)
+        self.assertIn("/竞猜详情 [赛事编号]", reply)
         self.assertIn("/撤销竞猜 L001", reply)
+        self.assertIn("【竞猜规则】", reply)
+        self.assertNotIn("/改选", reply)
         self.assertIn("/签到", reply)
         self.assertNotIn("/群聊签到", reply)
         self.assertIn("/我的积分", reply)
         self.assertIn("/积分榜", reply)
         self.assertIn("/积分规则", reply)
 
-    async def test_esports_prediction_help_is_registered_as_a_chat_command(self):
+    async def test_esports_prediction_commands_are_consolidated(self):
         self.assertIn("赛事竞猜", REGISTERED_COMMAND_NAMES)
-        self.assertTrue(hasattr(PointSystemPlugin, "esports_help_command"))
+        self.assertIn("竞猜规则", REGISTERED_COMMAND_NAMES)
+        self.assertIn("竞猜详情", REGISTERED_COMMAND_NAMES)
+        self.assertNotIn("改选", REGISTERED_COMMAND_NAMES)
+        self.assertTrue(hasattr(PointSystemPlugin, "esports_bet_command"))
+        self.assertTrue(hasattr(PointSystemPlugin, "esports_bet_detail_command"))
+        self.assertFalse(hasattr(PointSystemPlugin, "esports_help_command"))
+        self.assertFalse(hasattr(PointSystemPlugin, "esports_switch_bet_command"))
+        self.assertFalse(hasattr(PointSystemPlugin, "esports_rules_command"))
+
+    async def test_esports_prediction_alias_can_place_bet_and_rules_show_help(self):
+        plugin = build_plugin()
+        match = add_future_match(plugin)
+
+        help_reply = await anext(
+            plugin.esports_bet_command(FakeEvent("/竞猜规则"))
+        )
+        bet_reply = await anext(
+            plugin.esports_bet_command(
+                FakeEvent(f"/赛事竞猜 {match['display_id']} 1 100")
+            )
+        )
+
+        self.assertIn("【竞猜规则】", help_reply)
+        self.assertIn("下注成功", bet_reply)
+        self.assertEqual(plugin.data["users"]["123"]["points"], 900)
 
     async def test_sign_in_command_uses_short_name(self):
         self.assertIn("签到", REGISTERED_COMMAND_NAMES)
@@ -217,6 +251,93 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
     async def test_match_detail_is_not_registered_as_a_chat_command(self):
         self.assertNotIn("赛事详情", REGISTERED_COMMAND_NAMES)
         self.assertFalse(hasattr(PointSystemPlugin, "esports_match_detail_command"))
+
+    async def test_bet_detail_shows_match_and_current_group_bets(self):
+        plugin = build_plugin()
+        match = add_future_match(plugin)
+        plugin.data["users"]["456"] = plugin._normalize_user_record(
+            {"points": 1000}
+        )
+        plugin.data["users"]["789"] = plugin._normalize_user_record(
+            {"points": 1000}
+        )
+
+        await anext(
+            plugin.esports_bet(
+                FakeEvent(
+                    f"/竞猜 {match['display_id']} 1 100",
+                    group_id="100",
+                    user_id="123",
+                    sender_name="小明",
+                )
+            )
+        )
+        await anext(
+            plugin.esports_bet(
+                FakeEvent(
+                    f"/竞猜 {match['display_id']} 2 200",
+                    group_id="100",
+                    user_id="456",
+                    sender_name="小王",
+                )
+            )
+        )
+        await anext(
+            plugin.esports_bet(
+                FakeEvent(
+                    f"/竞猜 {match['display_id']} 1 300",
+                    group_id="200",
+                    user_id="789",
+                    sender_name="外群用户",
+                )
+            )
+        )
+
+        reply = await anext(
+            plugin.esports_bet_detail(
+                FakeEvent(f"/竞猜详情 {match['display_id']}", group_id="100")
+            )
+        )
+
+        self.assertIn(f"【竞猜详情｜{match['display_id']}｜LoL】", reply)
+        self.assertIn("时间：", reply)
+        self.assertIn("队伍：BLG vs TES", reply)
+        self.assertIn("赔率：BLG", reply)
+        self.assertIn("群内下注｜2 人｜300 积分", reply)
+        self.assertIn("小明｜BLG｜100 积分", reply)
+        self.assertIn("小王｜TES｜200 积分", reply)
+        self.assertNotIn("外群用户", reply)
+
+    async def test_bet_detail_without_id_ranks_current_matches_by_bettors(self):
+        plugin = build_plugin()
+        matches = [add_future_match(plugin, hours=hours) for hours in (3, 4, 5)]
+        next_user = 200
+        for match, bettor_count in zip(matches, (1, 3, 2)):
+            for _ in range(bettor_count):
+                next_user += 1
+                user_id = str(next_user)
+                plugin.data["users"][user_id] = plugin._normalize_user_record(
+                    {"points": 1000}
+                )
+                await anext(
+                    plugin.esports_bet(
+                        FakeEvent(
+                            f"/竞猜 {match['display_id']} 1 10",
+                            group_id=str(next_user),
+                            user_id=user_id,
+                        )
+                    )
+                )
+
+        reply = await anext(
+            plugin.esports_bet_detail(FakeEvent("/竞猜详情"))
+        )
+
+        self.assertIn("【当前下注人数最多的比赛】", reply)
+        positions = [reply.index(match["display_id"]) for match in matches]
+        self.assertLess(positions[1], positions[2])
+        self.assertLess(positions[2], positions[0])
+        self.assertIn("3 人", reply)
 
     async def test_recent_results_show_finished_match_score_and_winner(self):
         plugin = build_plugin()
@@ -509,17 +630,11 @@ class EsportsPredictionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("下注成功", first_replies[0])
         self.assertIn("累计 150", second_replies[0])
 
-    async def test_switch_then_withdraw_refunds_full_stake(self):
+    async def test_withdraw_refunds_full_stake(self):
         plugin = build_plugin()
         match = add_future_match(plugin)
         await anext(plugin.esports_bet(FakeEvent(f"/竞猜 {match['display_id']} 1 200")))
-
-        switched = await anext(
-            plugin.esports_switch_bet(FakeEvent(f"/改选 {match['display_id']} 2"))
-        )
         bet = next(iter(plugin.data["esports"]["bets"].values()))
-        self.assertEqual(bet["team_id"], match["teams"][1]["id"])
-        self.assertIn("已改选", switched)
 
         cancelled = await anext(
             plugin.esports_cancel_bet(FakeEvent(f"/撤单 {match['display_id']}"))
